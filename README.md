@@ -17,7 +17,7 @@ A simple usage example:
 
     main() {
       final file = new File('file.json');
-      Stream<List<int>> inputStream =
+      Stream<JsonStreamingEvent> inputStream =
         file.openRead()
         .expand((t) => t)
         .transform(jsonStreamingTransformation);
