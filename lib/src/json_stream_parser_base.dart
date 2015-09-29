@@ -47,13 +47,14 @@ class JsonStreamingEvent {
 }
 
 StreamTransformer<int, JsonStreamingEvent> get jsonStreamingTransformation =>
-    const _JsonStreamTransformer();
+    const JsonStreamTransformer();
 
-class _JsonStreamTransformer
+class JsonStreamTransformer
     implements StreamTransformer<int, JsonStreamingEvent> {
+  final bool isImplicitArray;
   Stream<JsonStreamingEvent> bind(Stream<int> inputStream) =>
-    JsonStreamingParser.streamTransform(inputStream);
-  const _JsonStreamTransformer();
+    JsonStreamingParser.streamTransform(inputStream, isImplicitArray);
+  const JsonStreamTransformer([bool this.isImplicitArray = false]);
 }
 
 //TODO: Rewrite this to make use of the Fetch and Streams API so less of the
