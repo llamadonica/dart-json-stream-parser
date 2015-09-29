@@ -20,7 +20,8 @@ enum _SubParser {
   numberPart3,
   numberPart4,
   end,
-  rawToken
+  rawToken,
+  errored
 }
 
 class JsonStreamingEvent {
@@ -128,7 +129,7 @@ class JsonStreamingParser {
   }
 
   void _handleEof(StreamController outputController) {
-    if ((_subParser == _SubParser.end) ||
+    if ((_subParser == _SubParser.end || _subParser == _SubParser.errored) ||
         (_isImplicitArray && _subParser == _SubParser.begin)) {
       outputController.close();
     } else {
@@ -157,6 +158,8 @@ class JsonStreamingParser {
         return _handleString(ch, outputController);
       case _SubParser.rawToken:
         return _handleNextSymbol(ch, outputController);
+      case _SubParser.errored:
+        break;
     }
   }
 
@@ -180,9 +183,10 @@ class JsonStreamingParser {
       return;
     } else {
       try {
-        _parserAssertNotReached("Expected {");
+        _parserAssertNotReached("Expected {", outputController);
       } catch (err) {
         outputController.addError(err);
+        _subParser = _SubParser.errored;
       }
     }
   }
@@ -191,13 +195,15 @@ class JsonStreamingParser {
     if (_isWhitespace(ch)) return;
     else {
       outputController.addError(new StateError("Expected WHITESPACE"));
+      _subParser = _SubParser.errored;
     }
   }
 
   void _handleTopSymbol(int ch, StreamController outputController) {
     if (_isWhitespace(ch)) return;
     if (_weAreInImplicitArray) {
-      throw new StateError("Expected WHITESPACE or { ");
+      outputController.addError(new StateError("Expected WHITESPACE or { "));
+      _subParser = _SubParser.errored;
     } else if (_weAreInObject && (_requireComma || _requireKey) && ch == 125) {
       //Close brace }
       outputController.add(_addJsonStreamingEvent(JsonStreamingBox.object,
@@ -232,12 +238,14 @@ class JsonStreamingParser {
       _requireKey = true;
       return;
     } else if (_weAreInObject && _requireComma) {
-      _parserAssertNotReached("Expected } or ,");
+      _parserAssertNotReached("Expected } or ,", outputController);
+      _subParser = _SubParser.errored;
     } else if (_weAreInObject && _requireColon && ch == 58) {
       _requireColon = false;
       return;
     } else if (_weAreInObject && _requireColon) {
-      _parserAssertNotReached("Expected :");
+      _parserAssertNotReached("Expected :", outputController);
+      _subParser = _SubParser.errored;
     } else if (_weAreInObject && _requireKey && ch == 34) {
       _stringIsReady = new Completer.sync();
       _stringBuffer = new StringBuffer();
@@ -251,10 +259,14 @@ class JsonStreamingParser {
         _lastKeyString = _lastValueString;
         _requireColon = true;
         _requireKey = false;
-      }, onError: (err) => outputController.addError(err));
+      }, onError: (err) {
+        outputController.addError(err);
+        _subParser = _SubParser.errored;
+      });
       return;
     } else if (_weAreInObject && _requireKey) {
-      _parserAssertNotReached("Expected \" or }");
+      _parserAssertNotReached("Expected \" or }", outputController);
+      _subParser = _SubParser.errored;
       return;
     } else if (_weAreInArray && ch == 93) {
       //Close bracket ]
@@ -277,7 +289,8 @@ class JsonStreamingParser {
       _currentKey++;
       _requireComma = false;
     } else if (_weAreInArray && _requireComma) {
-      _parserAssertNotReached("Expected ] or ,");
+      _parserAssertNotReached("Expected ] or ,", outputController);
+      _subParser = _SubParser.errored;
       //Now we can accept ANY JSON value.
     } else if (ch == 123) {
       // Open brace {
@@ -336,7 +349,10 @@ class JsonStreamingParser {
         outputController.add(_makeFinalSymbol(_lastValueString));
 
         _subParser = _SubParser.top;
-      }, onError: outputController.addError);
+      }, onError: (error) {
+        outputController.addError(error);
+        _subParser = _SubParser.errored;
+      });
 
       return;
     } else if (ch == 116) {
@@ -359,7 +375,10 @@ class JsonStreamingParser {
         outputController.add(_makeFinalSymbol(true));
         _subParser = _SubParser.top;
         _rawTokenResult = null;
-      }).catchError(outputController.addError);
+      }).catchError((error) {
+        outputController.addError(error);
+        _subParser = _SubParser.errored;
+      });
       return;
     } else if (ch == 102) {
       // f
@@ -387,7 +406,10 @@ class JsonStreamingParser {
 
         _subParser = _SubParser.top;
         _rawTokenResult = null;
-      }).catchError(outputController.addError);
+      }).catchError((error) {
+        outputController.addError(error);
+        _subParser = _SubParser.errored;
+      });
       return;
     } else if (ch == 110) {
       // n
@@ -410,7 +432,10 @@ class JsonStreamingParser {
 
         _subParser = _SubParser.top;
         _rawTokenResult = null;
-      }).catchError(outputController.addError);
+      }).catchError((error) {
+        outputController.addError(error);
+        _subParser = _SubParser.errored;
+      });
       return;
     } else if (<int>[45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57].contains(ch)) {
       _numberResult = new StringBuffer();
@@ -425,11 +450,14 @@ class JsonStreamingParser {
       }
       _numberIsReady.future.then((result) {
         outputController.add(_makeFinalSymbol(result));
-      }).catchError(outputController.addError);
+      }).catchError((error) {
+        outputController.addError(error);
+        _subParser = _SubParser.errored;
+      });
       return;
     } else {
       _parserAssertNotReached(
-          "Expected {, [, \", -, DIGIT, WHITESPACE, null, true, or false");
+          "Expected {, [, \", -, DIGIT, WHITESPACE, null, true, or false", outputController);
     }
   }
 
@@ -439,7 +467,7 @@ class JsonStreamingParser {
       _numberResult.writeCharCode(ch);
     } else {
       try {
-        _parserAssertNotReached("DIGIT");
+        _parserAssertNotReachedSync("DIGIT");
       } catch (err) {
         _numberIsReady.completeError(err);
       }
@@ -468,9 +496,9 @@ class JsonStreamingParser {
     } else if (ch == 46) {
       try {
         if (!_hasHadExponent) {
-          _parserAssertNotReached('Expected digit or e');
+          _parserAssertNotReachedSync('Expected digit or e');
         } else {
-          _parserAssertNotReached('Expected digit');
+          _parserAssertNotReachedSync('Expected digit');
         }
       } catch (error) {
         _numberIsReady.completeError(error);
@@ -481,7 +509,7 @@ class JsonStreamingParser {
       _subParser = _SubParser.numberPart3;
     } else if (ch == 46 || ch == 101) {
       try {
-        _parserAssertNotReached('Expected digit');
+        _parserAssertNotReachedSync('Expected digit');
       } catch (err) {
         _numberIsReady.completeError(err);
       }
@@ -489,7 +517,7 @@ class JsonStreamingParser {
       _numberResult.writeCharCode(ch);
     } else {
       try {
-        _parserAssertNotReached("Expected NUMBER PART");
+        _parserAssertNotReachedSync("Expected NUMBER PART");
       } catch (err) {
         _numberIsReady.completeError(err);
       }
@@ -508,7 +536,7 @@ class JsonStreamingParser {
       _subParser = _SubParser.numberPart2;
     } else {
       try {
-        _parserAssertNotReached("Expected DIGIT, +, or -");
+        _parserAssertNotReachedSync("Expected DIGIT, +, or -");
       } catch (err) {
         _numberIsReady.completeError(err);
       }
@@ -524,7 +552,7 @@ class JsonStreamingParser {
       _subParser = _SubParser.numberPart2;
     } else {
       try {
-        _parserAssertNotReached("Expected DIGIT");
+        _parserAssertNotReached("Expected DIGIT", outputController);
       } catch (err) {
         _numberIsReady.completeError(err);
       }
@@ -538,9 +566,13 @@ class JsonStreamingParser {
           JsonStreamingEventType eventType) =>
       new JsonStreamingEvent(object, currentPath, currentContext, eventType);
 
-  void _parserAssertNotReached(String message) {
-    throw new StateError(message);
+  void _parserAssertNotReached(String message, StreamController<JsonStreamingEvent> outputController) {
+    outputController.addError(new StateError(message));
+    _subParser = _SubParser.errored;
   }
+
+  void _parserAssertNotReachedSync(String message) {
+    throw new StateError(message);}
 
   JsonStreamingEvent _makeFinalSymbol(value) {
     if (_weAreInObject) {
@@ -560,10 +592,12 @@ class JsonStreamingParser {
     return result;
   }
 
-  void _parserAssert(bool condition, String message) {
+  bool _parserAssert(bool condition, String message) {
     if (!condition) {
-      _parserAssertNotReached(message);
+      _parserAssertNotReachedSync(message);
+      return true;
     }
+    return false;
   }
 
   void _handleNextSymbol(int ch, StreamController outputController) =>
@@ -620,7 +654,10 @@ class JsonStreamingParser {
                     });
                   });
                 });
-              }).catchError(outputController.addError);
+              }).catchError((error) {
+                outputController.addError(error);
+                _subParser = _SubParser.errored;
+              });
               return; // Because we'll still use the token subparser
             default:
               _stringBuffer.writeCharCode(nextBufferCode);
