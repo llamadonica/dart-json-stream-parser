@@ -53,7 +53,7 @@ class JsonStreamTransformer
     implements StreamTransformer<int, JsonStreamingEvent> {
   final bool isImplicitArray;
   Stream<JsonStreamingEvent> bind(Stream<int> inputStream) =>
-    JsonStreamingParser.streamTransform(inputStream, isImplicitArray);
+      JsonStreamingParser.streamTransform(inputStream, isImplicitArray);
   const JsonStreamTransformer([bool this.isImplicitArray = false]);
 }
 
@@ -115,8 +115,12 @@ class JsonStreamingParser {
       [bool isImplicitArray = false]) {
     final parser = new JsonStreamingParser._(isImplicitArray);
     final result = new StreamController();
-    parser._subscription = symbolBuffer.listen((ch) => parser._handleToken(ch, result),
-        onDone: () => parser._handleEof(result));
+    parser._subscription = symbolBuffer.listen(
+        (ch) => parser._handleToken(ch, result),
+        onDone: () => parser._handleEof(result), onError: (err) {
+      result.addError(err);
+      parser._subParser = _SubParser.errored;
+    });
 
     result.onPause = parser._subscription.pause;
     result.onResume = parser._subscription.resume;
@@ -458,7 +462,8 @@ class JsonStreamingParser {
       return;
     } else {
       _parserAssertNotReached(
-          "Expected {, [, \", -, DIGIT, WHITESPACE, null, true, or false", outputController);
+          "Expected {, [, \", -, DIGIT, WHITESPACE, null, true, or false",
+          outputController);
     }
   }
 
@@ -567,13 +572,15 @@ class JsonStreamingParser {
           JsonStreamingEventType eventType) =>
       new JsonStreamingEvent(object, currentPath, currentContext, eventType);
 
-  void _parserAssertNotReached(String message, StreamController<JsonStreamingEvent> outputController) {
+  void _parserAssertNotReached(
+      String message, StreamController<JsonStreamingEvent> outputController) {
     outputController.addError(new StateError(message));
     _subParser = _SubParser.errored;
   }
 
   void _parserAssertNotReachedSync(String message) {
-    throw new StateError(message);}
+    throw new StateError(message);
+  }
 
   JsonStreamingEvent _makeFinalSymbol(value) {
     if (_weAreInObject) {
