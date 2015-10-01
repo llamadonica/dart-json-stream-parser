@@ -1,6 +1,6 @@
 name: json_stream_parser
 description: A JSON parser that's capable of handling streams of characters.
-version: 0.1.0
+version: 0.1.1
 author: Adam Stark <llamadonica@gmail.com>
 homepage: https://github.com/llamadonica/dart-json-stream-parser
 
