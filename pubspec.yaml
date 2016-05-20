@@ -1,6 +1,9 @@
 name: json_stream_parser
-description: A JSON parser that's capable of handling streams of characters.
-version: 0.1.1
+description:
+    A JSON parser that's capable of handling streams of characters.
+    It doesn't depend on dart:io or dart:html so it can be used
+    either in the client- or server- side.
+version: 0.2.1
 author: Adam Stark <llamadonica@gmail.com>
 homepage: https://github.com/llamadonica/dart-json-stream-parser
 

@@ -33,7 +33,7 @@ void main() {
 }
 ''';
       var input = new Stream.fromIterable(new AsciiEncoder().convert(testString));
-      var result = await JsonStreamingParser.streamTransform(input).toList();
+      var result = await new JsonStreamTransformer().bind(input).toList();
     });
     test('Longer test', () async {
       var testString = r'''{
@@ -83,7 +83,8 @@ void main() {
   }
 ''';
       var input = new Stream.fromIterable(new AsciiEncoder().convert(testString));
-      var result = await JsonStreamingParser.streamTransform(input).toList();
+      new JsonUtf8StreamEncoder(false).bind(new JsonStreamTransformer().bind(input)).pipe(stdout);
+
     });
     test('File test', () async {
       var file = new File('test.json');
