@@ -8,4 +8,4 @@ library json_stream_parser;
 
 // TODO: Export any libraries intended for clients of this package.
 
-export 'src/json_stream_parser_base.dart';
+export 'src/json_stream_internal.dart';

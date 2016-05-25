@@ -4,8 +4,7 @@
 library json_stream_parser.test;
 
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:convert' as dart_convert;
 import 'dart:typed_data';
 
 import 'package:json_stream_parser/json_stream_parser.dart';
@@ -17,7 +16,7 @@ void main() {
   group('Fast buffer copies', () {
     setUp(() {
 
-    });
+    });/*
     test('provide the same results as slower but safer copies', () {
       var originalBuffer = new Uint8List(64*1024);
       for (var i = 0; i < 64*1024; i++) {
@@ -66,8 +65,9 @@ void main() {
   });
   group('Json fast parser', () {
     setUp(() {
-    });
-    var rawData = new Utf8Encoder().convert(TEST_STRING);
+    });*/
+    var rawData = new dart_convert.Utf8Encoder().convert(TEST_STRING);
+    /*
     test('decoder does not fail', () {
       var sink = new FuncSink<JsonStreamingEventFast>((data) {
       });
@@ -109,6 +109,26 @@ void main() {
         decoderB.add(data);
       });
       var decoderA = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkA));
+      decoderA.add(rawData);
+      decoderA.close();
+
+      for (var i = 0; i < resultsA.length; i++) {
+        expect(resultsA[i], resultsB[i]);
+      }
+    });
+    test('an empty json filter also does nothing', () {
+      var resultsB = [];
+      var sinkB = new FuncSink<List<int>>((data) {
+        resultsB.addAll(data);
+      });
+      var decoderB = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkB));
+
+      var resultsA = [];
+      var sinkA = new FuncSink<List<int>>((data) {
+        resultsA.addAll(data);
+        decoderB.add(data);
+      });
+      var decoderA = new JsonUtf8DecodeSinkFast(new JsonFilter(new JsonUtf8EncodeSinkFast(sinkA)));
       decoderA.add(rawData);
       decoderA.close();
 
@@ -186,10 +206,29 @@ void main() {
       i = 0;
       start = new DateTime.now();
       while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var result = new Utf8Encoder().convert(new JsonEncoder().convert(new JsonDecoder().convert(new Utf8Decoder().convert(rawData))));
+        var result = new JsonUtf8Decoder().convert(rawData);
         i++;
       }
       print("dart:convert can go $i times / sec");
+    });
+    */
+    test('Reviver', () {
+      var i = 0;
+      var start = new DateTime.now();
+      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
+        var x = new JsonUtf8Decoder(new MyJsonListener());
+        x.convert(rawData);
+        i++;
+      }
+      print("this convert can go $i times / sec");
+      i = 0;
+      start = new DateTime.now();
+      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
+        var x = new dart_convert.JsonDecoder();
+        x.convert(TEST_STRING);
+        i++;
+      }
+      print("native convert can go $i times / sec");
     });
   });
 }
@@ -198,16 +237,63 @@ Uint8List slowCopy(Uint8List originalBuffer, int i, int j) =>
   new Uint8List(j - i)
     ..setRange(0, j - i, originalBuffer, i);
 
-class PrintSink extends Sink<JsonStreamingEventFast> {
+
+class MyJsonListener extends JsonListener {
+
   @override
-  void add(data) {
-    stdout.write('\nSYMBOL: ');
-    stdout.add(data.bytestream);
+  void arrayElement() {
   }
 
   @override
-  void close() {
+  void beginArray() {
   }
+
+  @override
+  void beginObject() {
+  }
+
+  @override
+  void endArray() {
+  }
+
+  @override
+  void endObject() {
+    // TODO: implement endObject
+  }
+
+  @override
+  void handleBool(bool value) {
+    // TODO: implement handleBool
+  }
+
+  @override
+  void handleNull() {
+    // TODO: implement handleNull
+  }
+
+  @override
+  void handleNumber(num value) {
+    // TODO: implement handleNumber
+  }
+
+  @override
+  void handleString(String value) {
+    // TODO: implement handleString
+  }
+
+  @override
+  void propertyName() {
+    // TODO: implement propertyName
+  }
+
+  @override
+  void propertyValue() {
+    // TODO: implement propertyValue
+  }
+
+  // TODO: implement result
+  @override
+  get result => null;
 }
 
 typedef void AddFunc<T>(T data);
@@ -257,18 +343,18 @@ const TEST_STRING = r'''{
       "reprehenderit"
     ],
     "friends": [
-      {
+      [{
         "id": 0,
         "name": "Deborah Hyde"
-      },
-      {
+      }],
+      [{
         "id": 1,
         "name": "Morris Rutledge"
-      },
-      {
+      }],
+      [{
         "id": 2,
         "name": "Cristina Reed"
-      }
+      }]
     ],
     "greeting": "Hello, Pollard Robinson! You have 8 unread messages.",
     "favoriteFruit": "strawberry"
