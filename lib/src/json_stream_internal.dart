@@ -1,3 +1,4 @@
+// Copyright 2016 Adam Stark.
 // Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
@@ -7,6 +8,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:async';
+
+import 'package:quiver/collection.dart';
 
 const POWERS_OF_TEN = const [
   1.0,  /*  0 */
@@ -55,177 +58,27 @@ typedef _Reviver(var key, var value);
 typedef _ToEncodable(var o);
 
 
+typedef void AddFunc<T>(T data);
+typedef void CloseFunc();
+
+class FuncSink<T> extends Sink<T> {
+  final AddFunc<T> _add;
+  final CloseFunc _close;
+
+  FuncSink(this._add, {CloseFunc onClose : _defaultClose}) : _close = onClose;
+
+  static void _defaultClose() {}
+
+  @override
+  void add(T data) => _add(data);
+
+  @override
+  void close() => _close();
+}
 
 /**
  * This class encodes Strings to UTF-8 code units (unsigned 8 bit integers).
  */
-// TODO(floitsch): make this class public.
-class _Utf8Encoder {
-  int _carry = 0;
-  int _bufferIndex = 0;
-  final List<int> _buffer;
-
-  static const _DEFAULT_BYTE_BUFFER_SIZE = 1024;
-
-  _Utf8Encoder() : this.withBufferSize(_DEFAULT_BYTE_BUFFER_SIZE);
-
-  _Utf8Encoder.withBufferSize(int bufferSize)
-      : _buffer = _createBuffer(bufferSize);
-
-  /**
-   * Allow an implementation to pick the most efficient way of storing bytes.
-   */
-  static List<int> _createBuffer(int size) => new Uint8List(size);
-
-  /**
-   * Tries to combine the given [leadingSurrogate] with the [nextCodeUnit] and
-   * writes it to [_buffer].
-   *
-   * Returns true if the [nextCodeUnit] was combined with the
-   * [leadingSurrogate]. If it wasn't then nextCodeUnit was not a trailing
-   * surrogate and has not been written yet.
-   *
-   * It is safe to pass 0 for [nextCodeUnit] in which case only the leading
-   * surrogate is written.
-   */
-  bool _writeSurrogate(int leadingSurrogate, int nextCodeUnit) {
-    if (_isTailSurrogate(nextCodeUnit)) {
-      int rune = _combineSurrogatePair(leadingSurrogate, nextCodeUnit);
-      // If the rune is encoded with 2 code-units then it must be encoded
-      // with 4 bytes in UTF-8.
-      assert(rune > _THREE_BYTE_LIMIT);
-      assert(rune <= _FOUR_BYTE_LIMIT);
-      _buffer[_bufferIndex++] = 0xF0 | (rune >> 18);
-      _buffer[_bufferIndex++] = 0x80 | ((rune >> 12) & 0x3f);
-      _buffer[_bufferIndex++] = 0x80 | ((rune >> 6) & 0x3f);
-      _buffer[_bufferIndex++] = 0x80 | (rune & 0x3f);
-      return true;
-    } else {
-      // TODO(floitsch): allow to throw on malformed strings.
-      // Encode the half-surrogate directly into UTF-8. This yields
-      // invalid UTF-8, but we started out with invalid UTF-16.
-
-      // Surrogates are always encoded in 3 bytes in UTF-8.
-      _buffer[_bufferIndex++] = 0xE0 | (leadingSurrogate >> 12);
-      _buffer[_bufferIndex++] = 0x80 | ((leadingSurrogate >> 6) & 0x3f);
-      _buffer[_bufferIndex++] = 0x80 | (leadingSurrogate & 0x3f);
-      return false;
-    }
-  }
-
-  /**
-   * Fills the [_buffer] with as many characters as possible.
-   *
-   * Does not encode any trailing lead-surrogate. This must be done by the
-   * caller.
-   *
-   * Returns the position in the string. The returned index points to the
-   * first code unit that hasn't been encoded.
-   */
-  int _fillBuffer(String str, int start, int end) {
-    if (start != end && _isLeadSurrogate(str.codeUnitAt(end - 1))) {
-      // Don't handle a trailing lead-surrogate in this loop. The caller has
-      // to deal with those.
-      end--;
-    }
-    int stringIndex;
-    for (stringIndex = start; stringIndex < end; stringIndex++) {
-      int codeUnit = str.codeUnitAt(stringIndex);
-      // ASCII has the same representation in UTF-8 and UTF-16.
-      if (codeUnit <= _ONE_BYTE_LIMIT) {
-        if (_bufferIndex >= _buffer.length) break;
-        _buffer[_bufferIndex++] = codeUnit;
-      } else if (_isLeadSurrogate(codeUnit)) {
-        if (_bufferIndex + 3 >= _buffer.length) break;
-        // Note that it is safe to read the next code unit. We decremented
-        // [end] above when the last valid code unit was a leading surrogate.
-        int nextCodeUnit = str.codeUnitAt(stringIndex + 1);
-        bool wasCombined = _writeSurrogate(codeUnit, nextCodeUnit);
-        if (wasCombined) stringIndex++;
-      } else {
-        int rune = codeUnit;
-        if (rune <= _TWO_BYTE_LIMIT) {
-          if (_bufferIndex + 1 >= _buffer.length) break;
-          _buffer[_bufferIndex++] = 0xC0 | (rune >> 6);
-          _buffer[_bufferIndex++] = 0x80 | (rune & 0x3f);
-        } else {
-          assert(rune <= _THREE_BYTE_LIMIT);
-          if (_bufferIndex + 2 >= _buffer.length) break;
-          _buffer[_bufferIndex++] = 0xE0 | (rune >> 12);
-          _buffer[_bufferIndex++] = 0x80 | ((rune >> 6) & 0x3f);
-          _buffer[_bufferIndex++] = 0x80 | (rune & 0x3f);
-        }
-      }
-    }
-    return stringIndex;
-  }
-}
-
-/**
- * This class encodes chunked strings to UTF-8 code units (unsigned 8-bit
- * integers).
- */
-class _Utf8EncoderSink extends _Utf8Encoder with StringConversionSinkMixin {
-
-  final ByteConversionSink _sink;
-
-  _Utf8EncoderSink(this._sink);
-
-  void close() {
-    if (_carry != 0) {
-      // addSlice will call close again, but then the carry must be equal to 0.
-      addSlice("", 0, 0, true);
-      return;
-    }
-    _sink.close();
-  }
-
-  void addSlice(String str, int start, int end, bool isLast) {
-    _bufferIndex = 0;
-
-    if (start == end && !isLast) {
-      return;
-    }
-
-    if (_carry != 0) {
-      int nextCodeUnit = 0;
-      if (start != end) {
-        nextCodeUnit = str.codeUnitAt(start);
-      } else {
-        assert(isLast);
-      }
-      bool wasCombined = _writeSurrogate(_carry, nextCodeUnit);
-      // Either we got a non-empty string, or we must not have been combined.
-      assert(!wasCombined || start != end );
-      if (wasCombined) start++;
-      _carry = 0;
-    }
-    do {
-      start = _fillBuffer(str, start, end);
-      bool isLastSlice = isLast && (start == end);
-      if (start == end - 1 && _isLeadSurrogate(str.codeUnitAt(start))) {
-        if (isLast && _bufferIndex < _buffer.length - 3) {
-          // There is still space for the last incomplete surrogate.
-          // We use a non-surrogate as second argument. This way the
-          // function will just add the surrogate-half to the buffer.
-          bool hasBeenCombined = _writeSurrogate(str.codeUnitAt(start), 0);
-          assert(!hasBeenCombined);
-        } else {
-          // Otherwise store it in the carry. If isLast is true, then
-          // close will flush the last carry.
-          _carry = str.codeUnitAt(start);
-        }
-        start++;
-      }
-      _sink.addSlice(_buffer, 0, _bufferIndex, isLastSlice);
-      _bufferIndex = 0;
-    } while (start < end);
-    if (isLast) close();
-  }
-
-// TODO(floitsch): implement asUtf8Sink. Sligthly complicated because it
-// needs to deal with malformed input.
-}
 
 /**
  * A [JsonCodec] encodes JSON objects to strings and decodes strings to
@@ -236,8 +89,17 @@ class _Utf8EncoderSink extends _Utf8Encoder with StringConversionSinkMixin {
  *     var encoded = JSON.encode([1, 2, { "a": null }]);
  *     var decoded = JSON.decode('["foo", { "bar": 499 }]');
  */
-class JsonCodec extends Codec<Object, String> {
-  final JsonListener _listener;
+
+abstract class _ChunkedCodec<T, S, T1, S1> extends Codec<T, S> {
+  const _ChunkedCodec();
+  ChunkedConverter<T,S,T1,S1> get encoder;
+  ChunkedConverter<S,T,S1,T1> get decoder;
+}
+
+class JsonCodec extends _ChunkedCodec<Object, String, List<JsonListenerEvent>, String> {
+  /// Unlike in dart:convert, the reviver below is only used when doing
+  /// synchronous conversion.
+  final _Reviver _reviver;
   final _ToEncodable _toEncodable;
 
   /**
@@ -263,8 +125,8 @@ class JsonCodec extends Codec<Object, String> {
    * If [toEncodable] is omitted, it defaults to a function that returns the
    * result of calling `.toJson()` on the unencodable object.
    */
-  const JsonCodec({JsonListener listener, toEncodable(var object)})
-      : _listener = listener,
+  const JsonCodec({dynamic reviver(key, value), toEncodable(var object)})
+      : _reviver = reviver,
         _toEncodable = toEncodable;
 
   /**
@@ -275,7 +137,7 @@ class JsonCodec extends Codec<Object, String> {
    * integer list index for a list property, the string map key for object
    * properties, or `null` for the final result.
    */
-  JsonCodec.withListener(JsonListener listener) : this(listener: listener);
+  JsonCodec.withListener(dynamic reviver(key, value)) : this(reviver: reviver);
 
   /**
    * Parses the string and returns the resulting Json object.
@@ -287,10 +149,10 @@ class JsonCodec extends Codec<Object, String> {
    *
    * The default [reviver] (when not provided) is the identity function.
    */
-  dynamic decode(String source, {JsonListener listener}) {
-    if (listener == null) listener = _listener;
-    if (listener == null) return decoder.convert(source);
-    return new JsonDecoder(listener).convert(source);
+  dynamic decode(String source, [dynamic reviver(key, value)]) {
+    if (reviver == null) reviver = _reviver;
+    if (reviver == null) return decoder.convert(source);
+    return new JsonDecoder(reviver).convert(source);
   }
 
   /**
@@ -316,15 +178,15 @@ class JsonCodec extends Codec<Object, String> {
   }
 
   JsonDecoder get decoder {
-    if (_listener == null) return const JsonDecoder();
-    return new JsonDecoder(_listener);
+    if (_reviver == null) return const JsonDecoder();
+    return new JsonDecoder(_reviver);
   }
 }
 
 /**
  * This class converts JSON objects to strings.
  */
-class JsonEncoder extends Converter<Object, String> {
+class JsonEncoder extends ChunkedConverter<Object, String, List<JsonListenerEvent>, String> {
   /**
    * The string used for indention.
    *
@@ -418,15 +280,11 @@ class JsonEncoder extends Converter<Object, String> {
    * Returns a chunked-conversion sink that accepts at most one object. It is
    * an error to invoke `add` more than once on the returned sink.
    */
-  ChunkedConversionSink<Object> startChunkedConversion(Sink<String> sink) {
+  ChunkedConversionSink<List<JsonListenerEvent>> startChunkedConversion(Sink<String> sink) {
     if (sink is! StringConversionSink) {
       sink = new StringConversionSink.from(sink);
-    } else if (sink is _Utf8EncoderSink) {
-      return new _JsonUtf8EncoderSink(sink._sink, _toEncodable,
-          JsonUtf8Encoder._utf8Encode(indent),
-          JsonUtf8Encoder.DEFAULT_BUFFER_SIZE);
     }
-    return new _JsonEncoderSink(sink, _toEncodable, indent);
+    return new _JsonStringEncoderSink(sink, indent);
   }
 
   // Override the base class's bind, to provide a better type.
@@ -442,6 +300,102 @@ class JsonEncoder extends Converter<Object, String> {
   }
 }
 
+class _JsonObjectToStreamConverter {
+  final _ToEncodable _toEncodable;
+  final _seen = new Set();
+
+  _JsonObjectToStreamConverter(this._toEncodable);
+
+  void _checkCycle(object) {
+    if (_seen.contains(object)) {
+      throw new JsonCyclicError(object);
+    }
+    _seen.add(object);
+  }
+
+  Iterable<JsonListenerEvent> writeObject(Map o) sync* {
+    // Tries stringifying object directly. If it's not a simple value, List or
+    // Map, call toJson() to get a custom representation and try serializing
+    // that.
+    bool hasWritten = false;
+    for (var event in _writeJsonValue(o)) {
+      yield event;
+      hasWritten = true;
+    }
+    if (hasWritten) return;
+    _checkCycle(o);
+    try {
+      var customJson = _toEncodable(o);
+      for (var event in _writeJsonValue(customJson)) {
+        yield event;
+        hasWritten = true;
+      }
+      _removeSeen(o);
+    } catch (e) {
+      throw new JsonUnsupportedObjectError(o, cause: e);
+    }
+  }
+
+  Iterable<JsonListenerEvent> _writeJsonValue(object) sync* {
+    if (object is num) {
+      if (!object.isFinite) return;
+      yield new JsonListenerEvent(_JsonListenerEventTag.handleNumber, object);
+      return;
+    } else if (identical(object, true)) {
+      yield new JsonListenerEvent(_JsonListenerEventTag.handleBool, true);
+      return;
+    } else if (identical(object, false)) {
+      yield new JsonListenerEvent(_JsonListenerEventTag.handleBool, false);
+      return;
+    } else if (object == null) {
+      yield new JsonListenerEvent(_JsonListenerEventTag.handleNull);
+      return;
+    } else if (object is String) {
+      yield new JsonListenerEvent(_JsonListenerEventTag.handleString, object);
+      return;
+    } else if (object is List) {
+      _checkCycle(object);
+      yield* _writeList(object);
+      _removeSeen(object);
+      return;
+    } else if (object is Map) {
+      _checkCycle(object);
+      // writeMap can fail if keys are not all strings.
+      var success = _writeMap(object);
+      _removeSeen(object);
+      yield* success;
+    } else {
+      return;
+    }
+  }
+
+  Iterable<JsonListenerEvent> _writeMap(Map object) sync* {
+    var cachedEvents = [const JsonListenerEvent(_JsonListenerEventTag.beginObject)];
+    for (var key in object.keys) {
+      if (key is! String) return;
+      cachedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleString, key));
+      cachedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyName));
+      cachedEvents.addAll(_writeJsonValue(object[key]));
+      cachedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyValue));
+    }
+    yield* cachedEvents;
+    yield const JsonListenerEvent(_JsonListenerEventTag.endObject);
+  }
+
+  void _removeSeen(object) {
+    _seen.remove(object);
+  }
+
+  Iterable<JsonListenerEvent> _writeList(List object) sync* {
+    yield new JsonListenerEvent(_JsonListenerEventTag.beginArray);
+    for (var element in object) {
+      yield* _writeJsonValue(element);
+      yield new JsonListenerEvent(_JsonListenerEventTag.arrayElement);
+    }
+    yield new JsonListenerEvent(_JsonListenerEventTag.endArray);
+  }
+}
+
 /**
  * Encoder that encodes a single object as a UTF-8 encoded JSON string.
  *
@@ -449,7 +403,7 @@ class JsonEncoder extends Converter<Object, String> {
  * a JSON string, and then UTF-8 encoding the string, but without
  * creating an intermediate string.
  */
-class JsonUtf8Encoder extends Converter<Object, List<int>> {
+class JsonUtf8Encoder extends ChunkedConverter<Object, List<int>, List<JsonListenerEvent>, List<int>> {
   /** Default buffer size used by the JSON-to-UTF-8 encoder. */
   static const int DEFAULT_BUFFER_SIZE = 256;
   /** Indentation used in pretty-print mode, `null` if not pretty. */
@@ -508,20 +462,17 @@ class JsonUtf8Encoder extends Converter<Object, List<int>> {
     List<List<int>> bytes = [];
     // The `stringify` function always converts into chunks.
     // Collect the chunks into the `bytes` list, then combine them afterwards.
-    void addChunk(Uint8List chunk, int start, int end) {
-      if (start > 0 || end < chunk.length) {
-        int length = end - start;
-        chunk = new Uint8List.view(chunk.buffer,
-            chunk.offsetInBytes + start,
-            length);
-      }
+    void addChunk(Uint8List chunk) {
       bytes.add(chunk);
     }
-    _JsonUtf8Stringifier.stringify(object,
+    var sink = new ByteConversionSink.from(new FuncSink<List<int>>(addChunk));
+    var stringifier = new _JsonUtf8EncoderSink(
+        sink,
         _indent,
         _toEncodable,
-        _bufferSize,
-        addChunk);
+        _bufferSize);
+    stringifier.add(new _JsonObjectToStreamConverter(_toEncodable)._writeJsonValue(object).toList());
+    stringifier.close();
     if (bytes.length == 1) return bytes[0];
     int length = 0;
     for (int i = 0; i < bytes.length; i++) {
@@ -545,21 +496,15 @@ class JsonUtf8Encoder extends Converter<Object, List<int>> {
    * The argument [sink] will receive byte lists in sizes depending on the
    * `bufferSize` passed to the constructor when creating this encoder.
    */
-  ChunkedConversionSink<Object> startChunkedConversion(Sink<List<int>> sink) {
-    ByteConversionSink byteSink;
-    if (sink is ByteConversionSink) {
-      byteSink = sink;
-    } else {
-      byteSink = new ByteConversionSink.from(sink);
+  ChunkedConversionSink<List<JsonListenerEvent>> startChunkedConversion(Sink<List<int>> sink) {
+    if (sink is! ByteConversionSink) {
+      sink = new ByteConversionSink.from(sink);
     }
-    return new _JsonUtf8EncoderSink(byteSink, _toEncodable,
-        _indent, _bufferSize);
+    return new _JsonUtf8EncoderSink(sink, _indent, _toEncodable, _bufferSize);
   }
 
   // Override the base class's bind, to provide a better type.
-  Stream<List<int>> bind(Stream<Object> stream) {
-    return super.bind(stream);
-  }
+  Stream<List<int>> bind(Stream<Object> stream) => super.bind(stream);
 }
 
 /**
@@ -567,71 +512,43 @@ class JsonUtf8Encoder extends Converter<Object, List<int>> {
  *
  * The sink only accepts one value, but will produce output in a chunked way.
  */
-class _JsonEncoderSink extends ChunkedConversionSink<Object> {
-  final String _indent;
-  final _ToEncodable _toEncodable;
-  final StringConversionSink _sink;
+class _JsonStringEncoderSink extends _JsonEncoderSinkBase {
+  //final String _indent;
+  final ClosableStringSink _sinkInternal;
+  final StringConversionSinkBase _sink;
   bool _isDone = false;
 
-  _JsonEncoderSink(this._sink, this._toEncodable, this._indent);
-
-  /**
-   * Encodes the given object [o].
-   *
-   * It is an error to invoke this method more than once on any instance. While
-   * this makes the input effectly non-chunked the output will be generated in
-   * a chunked way.
-   */
-  void add(Object o) {
-    if (_isDone) {
-      throw new StateError("Only one call to add allowed");
+  factory _JsonStringEncoderSink(sink, indent) {
+    if (indent == null) {
+      return new _JsonStringEncoderSink._(sink);
+    } else {
+      return new _JsonStringEncoderSinkPretty._(sink, indent);
     }
-    _isDone = true;
-    ClosableStringSink stringSink = _sink.asStringSink();
-    _JsonStringStringifier.printOn(o, stringSink, _toEncodable, _indent);
-    stringSink.close();
   }
 
-  void close() { /* do nothing */ }
-}
+  _JsonStringEncoderSink._(StringConversionSinkBase sink) :
+      _sinkInternal = sink.asStringSink(),
+      _sink = sink,
+      super();
 
-/**
- * Sink returned when starting a chunked conversion from object to bytes.
- */
-class _JsonUtf8EncoderSink extends ChunkedConversionSink<Object> {
-  /** The byte sink receiveing the encoded chunks. */
-  final ByteConversionSink _sink;
-  final List<int> _indent;
-  final _ToEncodable _toEncodable;
-  final int _bufferSize;
-  bool _isDone = false;
-  _JsonUtf8EncoderSink(this._sink, this._toEncodable, this._indent,
-      this._bufferSize);
-
-  /** Callback called for each slice of result bytes. */
-  void _addChunk(Uint8List chunk, int start, int end) {
-    _sink.addSlice(chunk, start, end, false);
+  void _writeNumber(num number) {
+    _sinkInternal.write(number.toString());
+  }
+  void _writeString(String string) {
+    _sinkInternal.write(string);
+  }
+  void writeStringSlice(String string, int start, int end) {
+    _sinkInternal.write(string.substring(start, end));
+  }
+  void writeCharCode(int charCode) {
+    _sinkInternal.writeCharCode(charCode);
   }
 
-  void add(Object object) {
-    if (_isDone) {
-      throw new StateError("Only one call to add allowed");
-    }
-    _isDone = true;
-    _JsonUtf8Stringifier.stringify(object, _indent, _toEncodable,
-        _bufferSize,
-        _addChunk);
-    _sink.close();
-  }
-
-  void close() {
-    if (!_isDone) {
-      _isDone = true;
-      _sink.close();
-    }
+  @override
+  void _endStream() {
+    // TODO: implement _endStream
   }
 }
-
 
 // Implementation of encoder/stringifier.
 
@@ -641,9 +558,9 @@ dynamic _defaultToEncodable(dynamic object) => object.toJson();
  * JSON encoder that traverses an object structure and writes JSON source.
  *
  * This is an abstract implementation that doesn't decide on the output
- * format, but writes the JSON through abstract methods like [writeString].
+ * format, but writes the JSON through abstract methods like [_writeString].
  */
-abstract class _JsonStringifier {
+abstract class _JsonEncoderSinkBase extends ChunkedConversionSink<List<JsonListenerEvent>> with JsonListener {
   // Character code constants.
   static const int BACKSPACE       = 0x08;
   static const int TAB             = 0x09;
@@ -662,20 +579,19 @@ abstract class _JsonStringifier {
 
   /** List of objects currently being traversed. Used to detect cycles. */
   final List _seen = new List();
+  Sink<dynamic> get _sink;
   /** Function called for each un-encodable object encountered. */
-  final _ToEncodable _toEncodable;
 
-  _JsonStringifier(toEncodable(o))
-      : _toEncodable = toEncodable ?? _defaultToEncodable;
+  _JsonEncoderSinkBase();
 
   /** Append a string to the JSON output. */
-  void writeString(String characters);
+  void _writeString(String characters);
   /** Append part of a string to the JSON output. */
   void writeStringSlice(String characters, int start, int end);
   /** Append a single character, given by its code point, to the JSON output. */
   void writeCharCode(int charCode);
   /** Write a number to the JSON output. */
-  void writeNumber(num number);
+  void _writeNumber(num number);
 
   // ('0' + x) or ('a' + x - 10)
   static int hexDigit(int x) => x < 10 ? 48 + x : 87 + x;
@@ -683,7 +599,7 @@ abstract class _JsonStringifier {
   /**
    * Write, and suitably escape, a string's content as a JSON string literal.
    */
-  void writeStringContent(String s) {
+  void _writeStringContent(String s) {
     int offset = 0;
     final int length = s.length;
     for (int i = 0; i < length; i++) {
@@ -725,154 +641,85 @@ abstract class _JsonStringifier {
       }
     }
     if (offset == 0) {
-      writeString(s);
+      _writeString(s);
     } else if (offset < length) {
       writeStringSlice(s, offset, length);
     }
   }
 
-  /**
-   * Check if an encountered object is already being traversed.
-   *
-   * Records the object if it isn't already seen. Should have a matching call to
-   * [_removeSeen] when the object is no longer being traversed.
-   */
-  void _checkCycle(object) {
-    for (int i = 0; i < _seen.length; i++) {
-      if (identical(object, _seen[i])) {
-        throw new JsonCyclicError(object);
-      }
-    }
-    _seen.add(object);
+  bool _needsComma = false;
+
+  void handleString(String object) {
+    if (_needsComma) _writeString(',');
+    _writeString('"');
+    _writeStringContent(object);
+    _writeString('"');
   }
 
-  /**
-   * Remove [object] from the list of currently traversed objects.
-   *
-   * Should be called in the opposite order of the matching [_checkCycle]
-   * calls.
-   */
-  void _removeSeen(object) {
-    assert(!_seen.isEmpty);
-    assert(identical(_seen.last, object));
-    _seen.removeLast();
+  @override
+  void handleNumber(num value) {
+    if (_needsComma) _writeString(',');
+    _writeNumber(value);
   }
 
-  /**
-   * Write an object.
-   *
-   * If [object] isn't directly encodable, the [_toEncodable] function gets one
-   * chance to return a replacement which is encodable.
-   */
-  void writeObject(object) {
-    // Tries stringifying object directly. If it's not a simple value, List or
-    // Map, call toJson() to get a custom representation and try serializing
-    // that.
-    if (writeJsonValue(object)) return;
-    _checkCycle(object);
-    try {
-      var customJson = _toEncodable(object);
-      if (!writeJsonValue(customJson)) {
-        throw new JsonUnsupportedObjectError(object);
-      }
-      _removeSeen(object);
-    } catch (e) {
-      throw new JsonUnsupportedObjectError(object, cause: e);
-    }
+  @override
+  void handleBool(bool value) {
+    if (_needsComma) _writeString(',');
+    value ? _writeString('true') : _writeString('false');
   }
 
-  /**
-   * Serialize a [num], [String], [bool], [Null], [List] or [Map] value.
-   *
-   * Returns true if the value is one of these types, and false if not.
-   * If a value is both a [List] and a [Map], it's serialized as a [List].
-   */
-  bool writeJsonValue(object) {
-    if (object is num) {
-      if (!object.isFinite) return false;
-      writeNumber(object);
-      return true;
-    } else if (identical(object, true)) {
-      writeString('true');
-      return true;
-    } else if (identical(object, false)) {
-      writeString('false');
-      return true;
-    } else if (object == null) {
-      writeString('null');
-      return true;
-    } else if (object is String) {
-      writeString('"');
-      writeStringContent(object);
-      writeString('"');
-      return true;
-    } else if (object is List) {
-      _checkCycle(object);
-      writeList(object);
-      _removeSeen(object);
-      return true;
-    } else if (object is Map) {
-      _checkCycle(object);
-      // writeMap can fail if keys are not all strings.
-      var success = writeMap(object);
-      _removeSeen(object);
-      return success;
-    } else {
-      return false;
-    }
+  @override
+  void handleNull() {
+    if (_needsComma) _writeString(',');
+    _writeString('null');
   }
 
-  /** Serialize a [List]. */
-  void writeList(List list) {
-    writeString('[');
-    if (list.length > 0) {
-      writeObject(list[0]);
-      for (int i = 1; i < list.length; i++) {
-        writeString(',');
-        writeObject(list[i]);
-      }
-    }
-    writeString(']');
+  @override beginObject() {
+    if (_needsComma) _writeString(',');
+    _writeString('{');
+    _needsComma = false;
   }
 
-  /** Serialize a [Map]. */
-  bool writeMap(Map map) {
-    if (map.isEmpty) {
-      writeString("{}");
-      return true;
-    }
-    List keyValueList = new List(map.length * 2);
-    int i = 0;
-    bool allStringKeys = true;
-    map.forEach((key, value) {
-      if (key is! String) {
-        allStringKeys = false;
-      }
-      keyValueList[i++] = key;
-      keyValueList[i++] = value;
-    });
-    if (!allStringKeys) return false;
-    writeString('{');
-    String separator = '"';
-    for (int i = 0; i < keyValueList.length; i += 2) {
-      writeString(separator);
-      separator = ',"';
-      writeStringContent(keyValueList[i]);
-      writeString('":');
-      writeObject(keyValueList[i + 1]);
-    }
-    writeString('}');
-    return true;
+  @override endObject() => _writeString('}');
+
+  @override beginArray() {
+    if (_needsComma) _writeString(',');
+    _writeString('[');
+    _needsComma = false;
+  }
+
+  @override endArray() => _writeString(']');
+  @override propertyName() {
+    _writeString(':');
+    _needsComma = false;
+  }
+  @override propertyValue() {
+    _needsComma = true;
+  }
+  @override arrayElement() {
+    _needsComma = true;
+  }
+
+  void _endStream();
+
+  @override
+  void add(List<JsonListenerEvent> chunk) =>
+      _handleEvent(chunk);
+
+  @override
+  void close() {
+    _endStream();
+    _sink.close();
   }
 }
 
 /**
- * A modification of [_JsonStringifier] which indents the contents of [List] and
+ * A modification of [_JsonEncoderSinkBase] which indents the contents of [List] and
  * [Map] objects using the specified indent value.
  *
  * Subclasses should implement [writeIndentation].
  */
-abstract class _JsonPrettyPrintMixin implements _JsonStringifier {
+abstract class _JsonPrettyPrintMixin implements _JsonEncoderSinkBase {
   int _indentLevel = 0;
 
   /**
@@ -880,29 +727,29 @@ abstract class _JsonPrettyPrintMixin implements _JsonStringifier {
    */
   void writeIndentation(int indentLevel);
 
-  void writeList(List list) {
+  void _writeList(List list) {
     if (list.isEmpty) {
-      writeString('[]');
+      _writeString('[]');
     } else {
-      writeString('[\n');
+      _writeString('[\n');
       _indentLevel++;
       writeIndentation(_indentLevel);
       writeObject(list[0]);
       for (int i = 1; i < list.length; i++) {
-        writeString(',\n');
+        _writeString(',\n');
         writeIndentation(_indentLevel);
         writeObject(list[i]);
       }
-      writeString('\n');
+      _writeString('\n');
       _indentLevel--;
       writeIndentation(_indentLevel);
-      writeString(']');
+      _writeString(']');
     }
   }
 
   bool writeMap(Map map) {
     if (map.isEmpty) {
-      writeString("{}");
+      _writeString("{}");
       return true;
     }
     List keyValueList = new List(map.length * 2);
@@ -916,112 +763,55 @@ abstract class _JsonPrettyPrintMixin implements _JsonStringifier {
       keyValueList[i++] = value;
     });
     if (!allStringKeys) return false;
-    writeString('{\n');
+    _writeString('{\n');
     _indentLevel++;
     String separator = "";
     for (int i = 0; i < keyValueList.length; i += 2) {
-      writeString(separator);
+      _writeString(separator);
       separator = ",\n";
       writeIndentation(_indentLevel);
-      writeString('"');
-      writeStringContent(keyValueList[i]);
-      writeString('": ');
+      _writeString('"');
+      _writeStringContent(keyValueList[i]);
+      _writeString('": ');
       writeObject(keyValueList[i + 1]);
     }
-    writeString('\n');
+    _writeString('\n');
     _indentLevel--;
     writeIndentation(_indentLevel);
-    writeString('}');
+    _writeString('}');
     return true;
   }
 }
 
-/**
- * A specialziation of [_JsonStringifier] that writes its JSON to a string.
- */
-class _JsonStringStringifier extends _JsonStringifier {
-  final StringSink _sink;
-
-  _JsonStringStringifier(this._sink, _toEncodable) : super(_toEncodable);
-
-  /**
-   * Convert object to a string.
-   *
-   * The [toEncodable] function is used to convert non-encodable objects
-   * to encodable ones.
-   *
-   * If [indent] is not `null`, the resulting JSON will be "pretty-printed"
-   * with newlines and indentation. The `indent` string is added as indentation
-   * for each indentation level. It should only contain valid JSON whitespace
-   * characters (space, tab, carriage return or line feed).
-   */
-  static String stringify(object, toEncodable(o), String indent) {
-    StringBuffer output = new StringBuffer();
-    printOn(object, output, toEncodable, indent);
-    return output.toString();
-  }
-
-  /**
-   * Convert object to a string, and write the result to the [output] sink.
-   *
-   * The result is written piecemally to the sink.
-   */
-  static void printOn(
-      object, StringSink output, toEncodable(o), String indent) {
-    var stringifier;
-    if (indent == null) {
-      stringifier = new _JsonStringStringifier(output, toEncodable);
-    } else {
-      stringifier =
-      new _JsonStringStringifierPretty(output, toEncodable, indent);
-    }
-    stringifier.writeObject(object);
-  }
-
-  void writeNumber(num number) {
-    _sink.write(number.toString());
-  }
-  void writeString(String string) {
-    _sink.write(string);
-  }
-  void writeStringSlice(String string, int start, int end) {
-    _sink.write(string.substring(start, end));
-  }
-  void writeCharCode(int charCode) {
-    _sink.writeCharCode(charCode);
-  }
-}
-
-class _JsonStringStringifierPretty extends _JsonStringStringifier
+class _JsonStringEncoderSinkPretty extends _JsonStringEncoderSink
     with _JsonPrettyPrintMixin {
   final String _indent;
 
-  _JsonStringStringifierPretty(StringSink sink, toEncodable(o), this._indent)
-      : super(sink, toEncodable);
+  _JsonStringEncoderSinkPretty._(StringSink sink, this._indent)
+      : super._(sink);
 
   void writeIndentation(int count) {
-    for (int i = 0; i < count; i++) writeString(_indent);
+    for (int i = 0; i < count; i++) _writeString(_indent);
   }
 }
 
-typedef void _AddChunk(Uint8List list, int start, int end);
-
 /**
- * Specialization of [_JsonStringifier] that writes the JSON as UTF-8.
+ * Specialization of [_JsonEncoderSinkBase] that writes the JSON as UTF-8.
  *
  * The JSON text is UTF-8 encoded and written to [Uint8List] buffers.
  * The buffers are then passed back to a user provided callback method.
  */
-class _JsonUtf8Stringifier extends _JsonStringifier {
+class _JsonUtf8EncoderSink extends _JsonEncoderSinkBase {
   final int bufferSize;
-  final _AddChunk addChunk;
+  final ByteConversionSink _sink;
   Uint8List buffer;
   int index = 0;
 
-  _JsonUtf8Stringifier(toEncodable(o), int bufferSize, this.addChunk)
+  _JsonUtf8EncoderSink._(sink, int bufferSize)
       : this.bufferSize = bufferSize,
         buffer = new Uint8List(bufferSize),
-        super(toEncodable);
+        _sink = sink,
+        super();
 
   /**
    * Convert [object] to UTF-8 encoded JSON.
@@ -1034,35 +824,33 @@ class _JsonUtf8Stringifier extends _JsonStringifier {
    * If [indent] is non-`null`, the result will be "pretty-printed" with extra
    * newlines and indentation, using [indent] as the indentation.
    */
-  static void stringify(Object object,
+  factory _JsonUtf8EncoderSink(
+      ByteConversionSink sink,
       List<int> indent,
       toEncodable(o),
-      int bufferSize,
-      void addChunk(Uint8List chunk, int start, int end)) {
-    _JsonUtf8Stringifier stringifier;
+      int bufferSize) {
     if (indent != null) {
-      stringifier = new _JsonUtf8StringifierPretty(toEncodable, indent,
-          bufferSize, addChunk);
+      return new _JsonUtf8EncoderSinkPretty._(sink, indent, bufferSize);
     } else {
-      stringifier = new _JsonUtf8Stringifier(toEncodable, bufferSize, addChunk);
+      return new _JsonUtf8EncoderSink._(sink, bufferSize);
     }
-    stringifier.writeObject(object);
-    stringifier.flush();
   }
 
   /**
    * Must be called at the end to push the last chunk to the [addChunk]
    * callback.
    */
-  void flush() {
+
+
+  void _endStream() {
     if (index > 0) {
-      addChunk(buffer, 0, index);
+      _sink.addSlice(buffer, 0, index, true);
     }
     buffer = null;
     index = 0;
   }
 
-  void writeNumber(num number) {
+  void _writeNumber(num number) {
     writeAsciiString(number.toString());
   }
 
@@ -1077,7 +865,7 @@ class _JsonUtf8Stringifier extends _JsonStringifier {
     }
   }
 
-  void writeString(String string) {
+  void _writeString(String string) {
     writeStringSlice(string, 0, string.length);
   }
 
@@ -1140,7 +928,7 @@ class _JsonUtf8Stringifier extends _JsonStringifier {
   void writeByte(int byte) {
     assert(byte <= 0xff);
     if (index == buffer.length) {
-      addChunk(buffer, 0, index);
+      _sink.addSlice(buffer, 0, index, false);
       buffer = new Uint8List(bufferSize);
       index = 0;
     }
@@ -1149,15 +937,15 @@ class _JsonUtf8Stringifier extends _JsonStringifier {
 }
 
 /**
- * Pretty-printing version of [_JsonUtf8Stringifier].
+ * Pretty-printing version of [_JsonUtf8EncoderSink].
  */
-class _JsonUtf8StringifierPretty extends _JsonUtf8Stringifier
+class _JsonUtf8EncoderSinkPretty extends _JsonUtf8EncoderSink
     with _JsonPrettyPrintMixin {
   final List<int> indent;
-  _JsonUtf8StringifierPretty(
-      toEncodable(o), this.indent,
-      bufferSize, void addChunk(Uint8List buffer, int start, int end))
-      : super(toEncodable, bufferSize, addChunk);
+  _JsonUtf8EncoderSinkPretty._(
+      ByteConversionSink sink, this.indent,
+      int bufferSize)
+      : super._(sink, bufferSize);
 
   void writeIndentation(int count) {
     List<int> indent = this.indent;
@@ -1185,13 +973,37 @@ class _JsonUtf8StringifierPretty extends _JsonUtf8Stringifier
   }
 }
 
-_parseJson(String json, JsonListener listener) {
-  var parser = new _JsonStringParser(listener);
+/// The synchronous parser.
+_parseJson(String json, [_Reviver reviver]) {
+  JsonSynchronousListener listener;
+  if (reviver == null) {
+    listener = new BuildJsonListener();
+  } else {
+    listener = new _ReviverJsonListener(reviver);
+  }
+  var sink = new JsonListenerSink(listener);
+  var parser = new _JsonStringParser(sink);
   parser.chunk = json;
   parser.chunkEnd = json.length;
   parser.parse(0);
   parser.close();
   return listener.result;
+}
+
+typedef void _Action<T>(T target);
+
+class JsonListenerSink extends Sink<List<JsonListenerEvent>> {
+  final JsonListener _target;
+
+  JsonListenerSink(this._target);
+
+  @override
+  void add(List<JsonListenerEvent> data) {
+    _target._handleEvent(data);
+  }
+
+  @override
+  void close() {}
 }
 
 // UTF-8 constants.
@@ -1221,7 +1033,6 @@ int _combineSurrogatePair(int lead, int tail) =>
  *
  * The decoder handles chunked input.
  */
-// TODO(floitsch): make this class public.
 class _Utf8Decoder {
   final bool _allowMalformed;
   final StringSink _stringSink;
@@ -1397,6 +1208,7 @@ class _Utf8Decoder {
  * to a string.
  */
 class Utf8Decoder extends Converter<List<int>, String> {
+  final _Reviver _reviver;
   final bool _allowMalformed;
 
   /**
@@ -1409,8 +1221,8 @@ class Utf8Decoder extends Converter<List<int>, String> {
    * sequences with the Unicode Replacement character `U+FFFD` (�). Otherwise
    * it throws a [FormatException].
    */
-  const Utf8Decoder({ bool allowMalformed: false })
-      : this._allowMalformed = allowMalformed;
+  const Utf8Decoder({dynamic reviver(key, value), bool allowMalformed: false })
+      : _allowMalformed = allowMalformed, _reviver = reviver;
 
   /**
    * Converts the UTF-8 [codeUnits] (a list of unsigned 8-bit integers) to the
@@ -1462,7 +1274,7 @@ class Utf8Decoder extends Converter<List<int>, String> {
   Converter<List<int>, dynamic/*=T*/> fuse/*<T>*/(
       Converter<String, dynamic/*=T*/> next) {
     if (next is JsonDecoder) {
-      return new JsonUtf8Decoder(next._listener, this._allowMalformed)
+      return new JsonUtf8Decoder(reviver: next._reviver, allowMalformed: this._allowMalformed)
       as dynamic/*=Converter<List<int>, T>*/;
     }
     // TODO(lrn): Recognize a fused decoder where the next step is JsonDecoder.
@@ -1476,22 +1288,29 @@ class Utf8Decoder extends Converter<List<int>, String> {
   }
 }
 
-class JsonUtf8Decoder extends Converter<List<int>, Object> {
-  final JsonListener _listener;
+class JsonUtf8Decoder extends ChunkedConverter<List<int>, Object, List<int>, List<JsonListenerEvent>> {
+  final _Reviver _reviver;
   final bool _allowMalformed;
 
-  JsonUtf8Decoder([listener, this._allowMalformed = false]) : _listener = listener ?? new BuildJsonListener();
+  JsonUtf8Decoder({dynamic reviver(key, value), allowMalformed: false})
+  : _allowMalformed = allowMalformed, _reviver = reviver;
 
   Object convert(List<int> input) {
-    var parser = _JsonUtf8DecoderSink._createParser(_listener, _allowMalformed);
-    parser.chunk = input;
-    parser.chunkEnd = input.length;
-    parser.parse(0);
-    return parser.result;
+    JsonSynchronousListener listener;
+    if (_reviver == null) {
+      listener = new BuildJsonListener();
+    } else {
+      listener = new _ReviverJsonListener(_reviver);
+    }
+    var sink = new JsonListenerSink(listener);
+    var parser = new _JsonUtf8DecoderSink(sink, _allowMalformed);
+    parser.add(new Uint8List.fromList(input));
+    sink.close();
+    return listener.result;
   }
 
-  ByteConversionSink startChunkedConversion(Sink<Object> sink) {
-    return new _JsonUtf8DecoderSink(_listener, sink, _allowMalformed);
+  ByteConversionSink startChunkedConversion(Sink<List<JsonListenerEvent>> sink) {
+    return new _JsonUtf8DecoderSink(sink, _allowMalformed);
   }
 }
 
@@ -1503,23 +1322,88 @@ class JsonUtf8Decoder extends Converter<List<int>, Object> {
  * Listener for parsing events from [_ChunkedJsonParser].
  */
 abstract class JsonListener {
-  void handleString(String value);
-  void handleNumber(num value);
-  void handleBool(bool value);
-  void handleNull();
-  void beginObject();
-  void propertyName();
-  void propertyValue();
-  void endObject();
-  void beginArray();
-  void arrayElement();
-  void endArray();
+  void _handleEvent(List<JsonListenerEvent> event) {
+    for (var subevent in event) {
+      switch (subevent.tag) {
+        case _JsonListenerEventTag.arrayElement:
+          arrayElement();
+          break;
+        case _JsonListenerEventTag.beginArray:
+          beginArray();
+          break;
+        case _JsonListenerEventTag.beginObject:
+          beginObject();
+          break;
+        case _JsonListenerEventTag.endArray:
+          endArray();
+          break;
+        case _JsonListenerEventTag.endObject:
+          endObject();
+          break;
+        case _JsonListenerEventTag.handleBool:
+          handleBool(subevent.argument);
+          break;
+        case _JsonListenerEventTag.handleNull:
+          handleNull();
+          break;
+        case _JsonListenerEventTag.handleNumber:
+          handleNumber(subevent.argument);
+          break;
+        case _JsonListenerEventTag.handleString:
+          handleString(subevent.argument);
+          break;
+        case _JsonListenerEventTag.propertyName:
+          propertyName();
+          break;
+        case _JsonListenerEventTag.propertyValue:
+          propertyValue();
+          break;
+      }
+    }
+  }
+  void handleString(String value) {}
+  void handleNumber(num value) {}
+  void handleBool(bool value) {}
+  void handleNull() {}
+  void beginObject() {}
+  void propertyName() {}
+  void propertyValue() {}
+  void endObject() {}
+  void beginArray() {}
+  void arrayElement() {}
+  void endArray() {}
 
   /**
    * Read out the final result of parsing a JSON string.
    *
    * Must only be called when the entire input has been parsed.
    */
+}
+
+
+enum _JsonListenerEventTag {
+  arrayElement,
+  beginArray,
+  beginObject,
+  endArray,
+  endObject,
+  handleBool,
+  handleNumber,
+  handleString,
+  handleNull,
+  propertyName,
+  propertyValue
+}
+
+class JsonListenerEvent {
+  final _JsonListenerEventTag tag;
+  final dynamic argument;
+  const JsonListenerEvent(this.tag, [this.argument]);
+  String toString() => 'JsonListenerEvent($tag' + (argument == null ? ')' : ', $argument)');
+}
+
+
+abstract class JsonSynchronousListener extends JsonListener {
   get result;
 }
 
@@ -1529,7 +1413,7 @@ abstract class JsonListener {
  * This is a simple stack-based object builder. It keeps the most recently
  * seen value in a variable, and uses it depending on the following event.
  */
-class BuildJsonListener extends JsonListener {
+class BuildJsonListener extends JsonSynchronousListener {
   /**
    * Stack used to handle nested containers.
    *
@@ -1686,7 +1570,7 @@ class _NumberBuffer {
  *
  * Implementations include [String] and UTF-8 parsers.
  */
-abstract class _ChunkedJsonParser {
+abstract class _ChunkedJsonParser extends Sink {
   // A simple non-recursive state-based parser for JSON.
   //
   // Literal values accepted in states ARRAY_EMPTY, ARRAY_COMMA, OBJECT_COLON
@@ -1816,11 +1700,14 @@ abstract class _ChunkedJsonParser {
   // Mask used to mask off two lower bits.
   static const int TWO_BIT_MASK      = 3;
 
-  final JsonListener listener;
-
   // The current parsing state.
   int state = STATE_INITIAL;
   List<int> states = <int>[];
+
+  final Sink<List<JsonListenerEvent>> _sink;
+  // TODO: I really need to look at the size of these events. There has to be
+  // to guess at how big the array needs to be.
+  List<JsonListenerEvent> _chunkedEvents =  [];
 
   /**
    * Stores tokenizer state between chunks.
@@ -1865,7 +1752,7 @@ abstract class _ChunkedJsonParser {
    */
   var buffer = null;
 
-  _ChunkedJsonParser(this.listener);
+  _ChunkedJsonParser(this._sink);
 
   /**
    * Push the current parse [state] on a stack.
@@ -1918,16 +1805,7 @@ abstract class _ChunkedJsonParser {
     if (state != STATE_END) {
       fail(chunkEnd);
     }
-  }
-
-  /**
-   * Read out the result after successfully closing the parser.
-   *
-   * The parser is closed by calling [close] or calling [addSourceChunk] with
-   * `true` as second (`isLast`) argument.
-   */
-  Object get result {
-    return listener.result;
+    _sink.close();
   }
 
   /** Sets the current source chunk. */
@@ -2215,9 +2093,9 @@ abstract class _ChunkedJsonParser {
       count++;
     } while (count < keyword.length);
     if (keywordType == KWD_NULL) {
-      listener.handleNull();
+      _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleNull));
     } else {
-      listener.handleBool(keywordType == KWD_TRUE);
+      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleBool,keywordType == KWD_TRUE));
     }
     return position;
   }
@@ -2240,6 +2118,7 @@ abstract class _ChunkedJsonParser {
    */
   void parse(int position) {
     int length = chunkEnd;
+    
     if (partialState != NO_PARTIAL) {
       position = parsePartial(position);
       if (position == length) return;
@@ -2261,14 +2140,14 @@ abstract class _ChunkedJsonParser {
           break;
         case LBRACKET:
           if ((state & ALLOW_VALUE_MASK) != 0) fail(position);
-          listener.beginArray();
+          _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.beginArray));
           saveState(state);
           state = STATE_ARRAY_EMPTY;
           position++;
           break;
         case LBRACE:
           if ((state & ALLOW_VALUE_MASK) != 0) fail(position);
-          listener.beginObject();
+          _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.beginObject));
           saveState(state);
           state = STATE_OBJECT_EMPTY;
           position++;
@@ -2290,17 +2169,17 @@ abstract class _ChunkedJsonParser {
           break;
         case COLON:
           if (state != STATE_OBJECT_KEY) fail(position);
-          listener.propertyName();
+          _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyName));
           state = STATE_OBJECT_COLON;
           position++;
           break;
         case COMMA:
           if (state == STATE_OBJECT_VALUE) {
-            listener.propertyValue();
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyValue));
             state = STATE_OBJECT_COMMA;
             position++;
           } else if (state == STATE_ARRAY_VALUE) {
-            listener.arrayElement();
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.arrayElement));
             state = STATE_ARRAY_COMMA;
             position++;
           } else {
@@ -2309,10 +2188,10 @@ abstract class _ChunkedJsonParser {
           break;
         case RBRACKET:
           if (state == STATE_ARRAY_EMPTY) {
-            listener.endArray();
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endArray));
           } else if (state == STATE_ARRAY_VALUE) {
-            listener.arrayElement();
-            listener.endArray();
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.arrayElement));
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endArray));
           } else {
             fail(position);
           }
@@ -2321,10 +2200,10 @@ abstract class _ChunkedJsonParser {
           break;
         case RBRACE:
           if (state == STATE_OBJECT_EMPTY) {
-            listener.endObject();
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endObject));
           } else if (state == STATE_OBJECT_VALUE) {
-            listener.propertyValue();
-            listener.endObject();
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyValue));
+            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endObject));
           } else {
             fail(position);
           }
@@ -2339,6 +2218,8 @@ abstract class _ChunkedJsonParser {
           break;
       }
     }
+    _sink.add(_chunkedEvents);
+    _chunkedEvents.removeRange(0, _chunkedEvents.length);
     this.state = state;
   }
 
@@ -2357,7 +2238,7 @@ abstract class _ChunkedJsonParser {
         getChar(position + 3) != CHAR_e) {
       return fail(position);
     }
-    listener.handleBool(true);
+    _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleBool,true));
     return position + 4;
   }
 
@@ -2377,7 +2258,7 @@ abstract class _ChunkedJsonParser {
         getChar(position + 4) != CHAR_e) {
       return fail(position);
     }
-    listener.handleBool(false);
+    _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleBool,false));
     return position + 5;
   }
 
@@ -2396,7 +2277,7 @@ abstract class _ChunkedJsonParser {
         getChar(position + 3) != CHAR_l) {
       return fail(position);
     }
-    listener.handleNull();
+    _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleNull));
     return position + 4;
   }
 
@@ -2440,7 +2321,7 @@ abstract class _ChunkedJsonParser {
         return parseStringToBuffer(sliceEnd);
       }
       if (char == QUOTE) {
-        listener.handleString(getString(start, position - 1, bits));
+        _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleString, getString(start, position - 1, bits)));
         return position;
       }
       if (char < SPACE) {
@@ -2510,7 +2391,7 @@ abstract class _ChunkedJsonParser {
         if (quotePosition > start) {
           addSliceToString(start, quotePosition);
         }
-        listener.handleString(endString());
+        _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleString,endString()));
         return position;
       }
       if (char != BACKSLASH) {
@@ -2613,16 +2494,16 @@ abstract class _ChunkedJsonParser {
 
   int finishChunkNumber(int state, int start, int end, _NumberBuffer buffer) {
     if (state == NUM_ZERO) {
-      listener.handleNumber(0);
+      _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleNumber,0));
       return end;
     }
     if (end > start) {
       addNumberChunk(buffer, start, end, 0);
     }
     if (state == NUM_DIGIT) {
-      listener.handleNumber(buffer.parseInt());
+      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,buffer.parseInt()));
     } else if (state == NUM_DOT_DIGIT || state == NUM_E_DIGIT) {
-      listener.handleNumber(buffer.parseDouble());
+      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,buffer.parseDouble()));
     } else {
       fail(chunkEnd, "Unterminated number literal");
     }
@@ -2724,7 +2605,7 @@ abstract class _ChunkedJsonParser {
       intValue += expSign * exponent;
     }
     if (!isDouble) {
-      listener.handleNumber(sign * intValue);
+      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,sign * intValue));
       return position;
     }
     // Double values at or above this value (2 ** 53) may have lost precission.
@@ -2735,15 +2616,15 @@ abstract class _ChunkedJsonParser {
       double signedMantissa = doubleValue * sign;
       if (exponent >= -22) {
         if (exponent < 0) {
-          listener.handleNumber(signedMantissa / POWERS_OF_TEN[-exponent]);
+          _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,signedMantissa / POWERS_OF_TEN[-exponent]));
           return position;
         }
         if (exponent == 0) {
-          listener.handleNumber(signedMantissa);
+          _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,signedMantissa));
           return position;
         }
         if (exponent <= 22) {
-          listener.handleNumber(signedMantissa * POWERS_OF_TEN[exponent]);
+          _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,signedMantissa * POWERS_OF_TEN[exponent]));
           return position;
         }
       }
@@ -2751,7 +2632,7 @@ abstract class _ChunkedJsonParser {
     // If the value is outside the range +/-maxExactDouble or
     // exponent is outside the range +/-22, then we can't trust simple double
     // arithmetic to get the exact result, so we use the system double parsing.
-    listener.handleNumber(parseDouble(start, position));
+    _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,parseDouble(start, position)));
     return position;
   }
 
@@ -2771,7 +2652,7 @@ class _JsonStringParser extends _ChunkedJsonParser {
   String chunk;
   int chunkEnd;
 
-  _JsonStringParser(JsonListener listener) : super(listener);
+  _JsonStringParser(Sink<List<JsonListenerEvent>> sink) : super(sink);
 
   int getChar(int position) => chunk.codeUnitAt(position);
 
@@ -2814,14 +2695,14 @@ class _JsonStringParser extends _ChunkedJsonParser {
 /**
  * This class parses JSON strings and builds the corresponding objects.
  */
-class JsonDecoder extends Converter<String, Object> {
-  final JsonListener _listener;
+class JsonDecoder extends ChunkedConverter<String, Object, String, List<JsonListenerEvent>> {
+  final _Reviver _reviver;
   /**
    * Constructs a new JsonDecoder.
    *
    * The [reviver] may be `null`.
    */
-  const JsonDecoder([JsonListener listener]) : this._listener = listener;
+  const JsonDecoder([dynamic reviver(key, value)]) : _reviver = reviver;
 
   /**
    * Converts the given JSON-string [input] to its corresponding object.
@@ -2838,15 +2719,15 @@ class JsonDecoder extends Converter<String, Object> {
    *
    * Throws [FormatException] if the input is not valid JSON text.
    */
-  dynamic convert(String input) => _parseJson(input, _listener);
+  dynamic convert(String input) => _parseJson(input, _reviver);
 
   /**
    * Starts a conversion from a chunked JSON string to its corresponding object.
    *
    * The output [sink] receives exactly one decoded element through `add`.
    */
-  StringConversionSink startChunkedConversion(Sink<Object> sink) {
-    return new _JsonStringDecoderSink(this._listener, sink);
+  StringConversionSink startChunkedConversion(Sink<List<JsonListenerEvent>> sink) {
+    return new _JsonStringDecoderSink(sink);
   }
 }
 
@@ -2858,22 +2739,19 @@ class JsonDecoder extends Converter<String, Object> {
  */
 class _JsonStringDecoderSink extends StringConversionSinkBase {
   _ChunkedJsonParser _parser;
-  Function _reviver;
-  final Sink<Object> _sink;
+  final Sink<List<JsonListenerEvent>> _sink;
 
-  _JsonStringDecoderSink(reviver, this._sink)
-      : _reviver = reviver, _parser = _createParser(reviver);
+  _JsonStringDecoderSink(Sink<List<JsonListenerEvent>> sink)
+      :  _parser = _createParser(sink)
+      , _sink = sink;
 
-  static _ChunkedJsonParser _createParser(listener) {
-    if (listener == null) {
-      listener = new BuildJsonListener();
-    }
-    return new _JsonStringParser(listener);
+  static _ChunkedJsonParser _createParser(Sink<List<JsonListenerEvent>> sink) {
+    return new _JsonStringParser(sink);
   }
 
   void addSlice(String chunk, int start, int end, bool isLast) {
     _parser.chunk = chunk;
-    (_parser as _JsonUtf8Parser).chunkEnd = end;
+    (_parser as _JsonStringParser).chunkEnd = end;
     _parser.parse(start);
     if (isLast) _parser.close();
   }
@@ -2884,14 +2762,11 @@ class _JsonStringDecoderSink extends StringConversionSinkBase {
 
   void close() {
     _parser.close();
-    var decoded = _parser.result;
-    _sink.add(decoded);
-    _sink.close();
   }
 
   ByteConversionSink asUtf8Sink(bool allowMalformed) {
     _parser = null;
-    return new _JsonUtf8DecoderSink(_reviver, _sink, allowMalformed);
+    return new _JsonUtf8DecoderSink(_sink, allowMalformed);
   }
 }
 
@@ -3142,7 +3017,7 @@ class _Utf8StringBuffer {
 /**
  * Chunked JSON parser that parses UTF-8 chunks.
  */
-class _JsonUtf8Parser extends _ChunkedJsonParser {
+class _JsonUtf8DecoderSink extends _ChunkedJsonParser implements ByteConversionSink {
   final bool allowMalformed;
   Uint8List chunk;
   int chunkEnd;
@@ -3155,8 +3030,8 @@ class _JsonUtf8Parser extends _ChunkedJsonParser {
   static const int QUOTES = 0x22222222;
   static const int NON_ESCAPES = 0xFDFDFDFD;
 
-  _JsonUtf8Parser(JsonListener listener, this.allowMalformed)
-      : super(listener);
+  _JsonUtf8DecoderSink(sink, this.allowMalformed)
+      : super(sink);
 
   int getChar(int position) => chunk[position];
 
@@ -3200,45 +3075,54 @@ class _JsonUtf8Parser extends _ChunkedJsonParser {
     String string = getString(start, end, 0x7f);
     return double.parse(string);
   }
-}
 
-/* double _parseDouble(String source, int start, int end)
-native "Double_parse"; */
-
-/**
- * Implements the chunked conversion from a UTF-8 encoding of JSON
- * to its corresponding object.
- */
-class _JsonUtf8DecoderSink extends ByteConversionSinkBase {
-  _JsonUtf8Parser _parser;
-  final Sink<Object> _sink;
-
-  _JsonUtf8DecoderSink(reviver, this._sink, bool allowMalformed)
-      : _parser = _createParser(reviver, allowMalformed);
-
-  static _ChunkedJsonParser _createParser(listener, bool allowMalformed) {
-    return new _JsonUtf8Parser(listener, allowMalformed);
+  void _addChunk(Uint8List chunk_, int start, int end) {
+    chunk = chunk_;
+    chunkEnd = end;
+    parse(start);
   }
 
-  void addSlice(List<int> chunk, int start, int end, bool isLast) {
+  void addSlice(List<int> chunk_, int start, int end, bool isLast) {
     _addChunk(chunk, start, end);
     if (isLast) close();
   }
 
   void add(List<int> chunk) {
+    if (chunk is! Uint8List) {
+      chunk = new Uint8List.fromList(chunk);
+    }
     _addChunk(chunk, 0, chunk.length);
   }
-
-  void _addChunk(List<int> chunk, int start, int end) {
-    _parser.chunk = chunk;
-    _parser.chunkEnd = end;
-    _parser.parse(start);
-  }
-
-  void close() {
-    _parser.close();
-    var decoded = _parser.result;
-    _sink.add(decoded);
-    _sink.close();
-  }
 }
+/*
+class _TrainedGrowableList<T> extends DelegatingList<T> {
+  @override
+  List<T> delegate;
+  int _capacity;
+  int _length;
+  int get length => _length;
+  set length(int value) {
+    if (value > _capacity) {
+      var newCapacity = _capacity;
+      while (newCapacity < value) newCapacity <<= 2;
+      _grow(newCapacity);
+    }
+
+  }
+
+  void _grow(int newCapacity) {
+    var newList = Li
+  }
+
+  _TrainedGrowableList(int capacity) :
+      delegate = new List(capacity),
+      _capacity = capacity,
+      _length = 0;
+
+
+
+
+}
+*/
+/* double _parseDouble(String source, int start, int end)
+native "Double_parse"; */

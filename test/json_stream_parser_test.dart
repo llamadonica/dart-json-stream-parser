@@ -13,135 +13,129 @@ import 'package:test/test.dart';
 
 
 void main() {
-  group('Fast buffer copies', () {
+  group('json from utf8:', () {
     setUp(() {
-
-    });/*
-    test('provide the same results as slower but safer copies', () {
-      var originalBuffer = new Uint8List(64*1024);
-      for (var i = 0; i < 64*1024; i++) {
-        originalBuffer[i] = i & 0xFF;
-      }
-      var bufferCopyA = fastCopy(originalBuffer, 0, 64*1024);
-      var bufferCopyB = slowCopy(originalBuffer, 0, 64*1024);
-      for (var i = 0; i < 64*1024; i++) {
-        expect(bufferCopyA[i], bufferCopyB[i]);
-      }
     });
-    test('Provide the same results as slower but safer copies', () {
-      var originalBuffer = new Uint8List(64*1024 + 6);
-      for (var i = 0; i < 64*1024 + 6; i++) {
-        originalBuffer[i] = i & 0xFF;
-      }
-      var bufferCopyA = fastCopy(originalBuffer, 0, 64*1024 + 6);
-      var bufferCopyB = slowCopy(originalBuffer, 0, 64*1024 + 6);
-      for (var i = 0; i < 64*1024 + 6; i++) {
-        expect(bufferCopyA[i], bufferCopyB[i]);
-      }
-    });
-    test('Provide the same results as slower but safer copies', () {
-      var originalBuffer = new Uint8List(64*1024 + 6);
-      for (var i = 0; i < 64*1024 + 6; i++) {
-        originalBuffer[i] = i & 0xFF;
-      }
-      var bufferCopyA = fastCopy(originalBuffer, 6, 64*1024 + 6);
-      var bufferCopyB = slowCopy(originalBuffer, 6, 64*1024 + 6);
-      for (var i = 0; i < 64*1024; i++) {
-        expect(bufferCopyA[i], bufferCopyB[i]);
-      }
-    });
-    test('Provide the same results as slower but safer copies', () {
-      var originalBuffer = new Uint8List(64*1024 + 6);
-      for (var i = 0; i < 64*1024 + 6; i++) {
-        originalBuffer[i] = i & 0xFF;
-      }
-      var modifiedBuffer = new Uint8List.view(originalBuffer.buffer, 6, 64*1024);
-      var bufferCopyA = fastCopy(modifiedBuffer, 0, 64*1024);
-      var bufferCopyB = slowCopy(modifiedBuffer, 0, 64*1024);
-      for (var i = 0; i < 64*1024; i++) {
-        expect(bufferCopyA[i], bufferCopyB[i]);
-      }
-    });
-  });
-  group('Json fast parser', () {
-    setUp(() {
-    });*/
     var rawData = new dart_convert.Utf8Encoder().convert(TEST_STRING);
-    /*
-    test('decoder does not fail', () {
-      var sink = new FuncSink<JsonStreamingEventFast>((data) {
-      });
-      var decoder = new JsonUtf8DecodeSinkFast(sink);
+
+    test('utf8 decoder does not fail', () {
+      var sink = new JsonListenerSink(new MyJsonListener());
+      var decoder = new JsonUtf8Decoder().startChunkedConversion(sink);
       decoder.add(rawData);
       decoder.close();
     });
-    test('decoder does not fail', () {
-      var sink = new FuncSink<List<int>>((data) {
-      });
-      var decoder = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sink));
+    test('our object is deep-equal to the dart:convert version', () {
+      var ours = new JsonUtf8Decoder().convert(rawData);
+      var theirs = new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData);
+      _deepEqual(ours, theirs);
+    });
+    test('decoder->encoder does not fail', () {
+      var sink = new FuncSink<String>((data) {});
+      var utf8Converter = new dart_convert.Utf8Decoder().startChunkedConversion(sink);
+      var decoder = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(utf8Converter));
       decoder.add(rawData);
       decoder.close();
+    });
+    test('our encodig is the same as the dart:convert version', () {
+      //We can relax this constraint later.
+      var resultsB = [];
+      var sink = new FuncSink<List<int>>((data) {
+        resultsB.addAll(data);
+      });
+      var decoder = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sink));
+      var theirs = new dart_convert.JsonEncoder().fuse(new dart_convert.Utf8Encoder()).convert(new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData));
+      decoder.add(rawData);
+      decoder.close();
+
+      for (var i = 0; i < resultsB.length; i++) {
+        expect(theirs[i], resultsB[i]);
+      }
     });
     test('decoder speed test', () {
       var start = new DateTime.now();
       var i = 0;
 
       while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var sink = new FuncSink<List<int>>((data) {});
-        var decoder = new JsonUtf8DecodeSinkFast(
-            new JsonUtf8EncodeSinkFast(sink));
+        var sink = new FuncSink<List<JsonListenerEvent>>((data) {});
+        var decoder = new JsonUtf8Decoder().startChunkedConversion(sink);
         decoder.add(rawData);
         decoder.close();
         i++;
       }
-      print('We chunked $i times / sec');
+      print('We chunked $i times / sec (this doesn\'t reconstruct objects)');
+      start = new DateTime.now();
+      i = 0;
+
+      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
+        var decoder = new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData);
+        i++;
+      }
+      print('Native dart convert $i times / sec');
+    });
+    test('decoder speed test', () {
+      var start = new DateTime.now();
+      var i = 0;
+
+      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
+        var decoder = new JsonUtf8Decoder().convert(rawData);
+        i++;
+      }
+      print('We chunked $i times / sec (this completely reconstructs objects)');
+      start = new DateTime.now();
+      i = 0;
+
+      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
+        var decoder = new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData);
+        i++;
+      }
+      print('Native dart convert $i times / sec');
     });
     test('reencoding always produces the same results', () {
+      var sink = new FuncSink<String>((data) {
+        print(data);
+      });
+      var utf8Converter = new dart_convert.Utf8Decoder().startChunkedConversion(sink);
+
       var resultsB = [];
       var sinkB = new FuncSink<List<int>>((data) {
+        utf8Converter.add(data);
         resultsB.addAll(data);
       });
-      var decoderB = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkB));
+      var decoderB = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sinkB));
 
       var resultsA = [];
       var sinkA = new FuncSink<List<int>>((data) {
         resultsA.addAll(data);
         decoderB.add(data);
+      }, onClose: () {
+        decoderB.close();
       });
-      var decoderA = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkA));
+      var decoderA = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sinkA));
       decoderA.add(rawData);
       decoderA.close();
+      utf8Converter.close();
 
       for (var i = 0; i < resultsA.length; i++) {
         expect(resultsA[i], resultsB[i]);
       }
     });
-    test('an empty json filter also does nothing', () {
-      var resultsB = [];
-      var sinkB = new FuncSink<List<int>>((data) {
-        resultsB.addAll(data);
-      });
-      var decoderB = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkB));
+    test('an BuildJsonListener also produces the same result as dart:convert', () {
+      var builder = new BuildJsonListener();
+      var sinkB = new JsonListenerSink(builder);
+      var decoderB = new JsonUtf8Decoder().startChunkedConversion(sinkB);
+      decoderB.add(rawData);
+      decoderB.close();
 
-      var resultsA = [];
-      var sinkA = new FuncSink<List<int>>((data) {
-        resultsA.addAll(data);
-        decoderB.add(data);
-      });
-      var decoderA = new JsonUtf8DecodeSinkFast(new JsonFilter(new JsonUtf8EncodeSinkFast(sinkA)));
-      decoderA.add(rawData);
-      decoderA.close();
+      var theirs = new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData);
 
-      for (var i = 0; i < resultsA.length; i++) {
-        expect(resultsA[i], resultsB[i]);
-      }
+      _deepEqual(builder.result, theirs);
     });
     test('splitting into tiny chunks has no effect', () {
       var resultsB = [];
       var sinkB = new FuncSink<List<int>>((data) {
         resultsB.addAll(data);
       });
-      var decoderB = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkB));
+      var decoderB = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sinkB));
 
       var resultsA = [];
       var sinkA = new FuncSink<List<int>>((data) {
@@ -149,8 +143,8 @@ void main() {
         for (var byte in data) {
           decoderB.add([byte]);
         }
-      });
-      var decoderA = new JsonUtf8DecodeSinkFast(new JsonUtf8EncodeSinkFast(sinkA));
+      }, onClose: () => decoderB.close());
+      var decoderA = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sinkA));
       decoderA.add(rawData);
       decoderA.close();
 
@@ -158,79 +152,158 @@ void main() {
         expect(resultsA[i], resultsB[i]);
       }
     });
-    test('Path-setter emitter', () {
-      var sink = new FuncSink<PathSetterEvent>((data) {
-      });
-      var decoder = new JsonUtf8DecodeSinkFast(new PathSetterDecoderSink(sink));
+  });
+  group('json from strings:', () {
+    setUp(() {
+    });
+    var rawData = TEST_STRING;
+
+    test('utf8 decoder does not fail', () {
+      var sink = new JsonListenerSink(new MyJsonListener());
+      var decoder = new JsonDecoder().startChunkedConversion(sink);
       decoder.add(rawData);
       decoder.close();
     });
-    test('Path-setter emitter speed test', () {
+    test('our object is deep-equal to the dart:convert version', () {
+      var ours = new JsonDecoder().convert(rawData);
+      var theirs = new dart_convert.JsonDecoder().convert(rawData);
+      _deepEqual(ours, theirs);
+    });
+    test('decoder->encoder does not fail', () {
+      var sink = new FuncSink<String>((data) {});
+      var decoder = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sink));
+      decoder.add(rawData);
+      decoder.close();
+    });
+    test('our encodig is the same as the dart:convert version', () {
+      //We can relax this constraint later.
+      var resultsB = new StringBuffer();
+      var sink = new FuncSink<String>((data) {
+        resultsB.write(data);
+      });
+      var decoder = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sink));
+      var theirs = new dart_convert.JsonEncoder().convert(new dart_convert.JsonDecoder().convert(rawData));
+      decoder.add(rawData);
+      decoder.close();
+
+      expect(theirs, resultsB.toString());
+    });
+    test('decoder speed test', () {
       var start = new DateTime.now();
       var i = 0;
 
       while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var sink = new FuncSink<PathSetterEvent>((data) {});
-        var decoder = new JsonUtf8DecodeSinkFast(
-            new PathSetterDecoderSink(sink));
+        var sink = new FuncSink((data) {});
+        var decoder = new JsonDecoder().startChunkedConversion(sink);
         decoder.add(rawData);
         decoder.close();
         i++;
       }
-      print("We converted $i times / sec");
-    });
+      print('We chunked $i times / sec (this doesn\'t reconstruct objects)');
+      start = new DateTime.now();
+      i = 0;
 
-    test('Path reviver', () async {
-      var sink = new PathReviver();
-      var decoder = new JsonUtf8DecodeSinkFast(new PathSetterDecoderSink(sink));
-      decoder.add(rawData);
-      decoder.close();
-      var result = await sink;
+      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
+        var decoder = new dart_convert.JsonDecoder().convert(rawData);
+        i++;
+      }
+      print('Native dart convert $i times / sec');
     });
-
-    test('Path reviver speed test', () async {
+    test('decoder speed test', () {
       var start = new DateTime.now();
       var i = 0;
 
       while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var sink = new PathReviver();
-        var decoder = new JsonUtf8DecodeSinkFast(
-            new PathSetterDecoderSink(sink))
-          ..add(rawData)
-          ..close();
-        var result = await sink;
+        var decoder = new JsonDecoder().convert(rawData);
         i++;
       }
-      print("We converted $i times / sec");
+      print('We chunked $i times / sec (this completely reconstructs objects)');
+      start = new DateTime.now();
+      i = 0;
 
-      i = 0;
-      start = new DateTime.now();
       while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var result = new JsonUtf8Decoder().convert(rawData);
+        var decoder = new dart_convert.JsonDecoder().convert(rawData);
         i++;
       }
-      print("dart:convert can go $i times / sec");
+      print('Native dart convert $i times / sec');
     });
-    */
-    test('Reviver', () {
-      var i = 0;
-      var start = new DateTime.now();
-      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var x = new JsonUtf8Decoder(new MyJsonListener());
-        x.convert(rawData);
-        i++;
-      }
-      print("this convert can go $i times / sec");
-      i = 0;
-      start = new DateTime.now();
-      while (new DateTime.now().difference(start).inMilliseconds < 1000) {
-        var x = new dart_convert.JsonDecoder();
-        x.convert(TEST_STRING);
-        i++;
-      }
-      print("native convert can go $i times / sec");
+    test('reencoding always produces the same results', () {
+      var sink = new FuncSink<String>((data) {
+      });
+
+      var resultsB = new StringBuffer();
+      var sinkB = new FuncSink<String>((data) {
+        sink.add(data);
+        resultsB.write(data);
+      });
+      var decoderB = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sinkB));
+
+      var resultsA = new StringBuffer();
+      var sinkA = new FuncSink<String>((data) {
+        resultsA.write(data);
+        decoderB.add(data);
+      }, onClose: () {
+        decoderB.close();
+      });
+      var decoderA = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sinkA));
+      decoderA.add(rawData);
+      decoderA.close();
+
+      expect(resultsA.toString(), resultsB.toString());
+    });
+    test('an BuildJsonListener also produces the same result as dart:convert', () {
+      var builder = new BuildJsonListener();
+      var sinkB = new JsonListenerSink(builder);
+      var decoderB = new JsonDecoder().startChunkedConversion(sinkB);
+      decoderB.add(rawData);
+      decoderB.close();
+
+      var theirs = new dart_convert.JsonDecoder().convert(rawData);
+
+      _deepEqual(builder.result, theirs);
+    });
+    test('splitting into tiny chunks has no effect', () {
+      var resultsB = new StringBuffer();
+      var sinkB = new FuncSink<String>((data) {
+        resultsB.write(data);
+      });
+      var decoderB = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sinkB));
+
+      var resultsA = new StringBuffer();
+      var sinkA = new FuncSink<String>((String data) {
+        resultsA.write(data);
+        for (var byte in data.codeUnits) {
+          decoderB.add(new String.fromCharCode(byte));
+        }
+      });
+      var decoderA = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sinkA));
+      decoderA.add(rawData);
+      decoderA.close();
+
+      expect(resultsA.toString(), resultsB.toString());
     });
   });
+}
+
+void _deepEqual(Object ours, Object theirs) {
+  if (theirs is Map) {
+    expect(ours is Map, true);
+    for (var key in ours.keys) {
+      expect(theirs.containsKey(key), true);
+      _deepEqual(ours[key], theirs[key]);
+    }
+    for (var key in theirs.keys) {
+      expect(ours.containsKey(key), true);
+    }
+  } else if (theirs is List) {
+    expect(ours is List, true);
+    expect(ours.length, theirs.length);
+    for (var i = 0; i < theirs.length; i++) {
+      _deepEqual(ours[i], theirs[i]);
+    }
+  } else {
+    expect(ours, theirs);
+  }
 }
 
 Uint8List slowCopy(Uint8List originalBuffer, int i, int j) =>
@@ -258,42 +331,31 @@ class MyJsonListener extends JsonListener {
 
   @override
   void endObject() {
-    // TODO: implement endObject
   }
 
   @override
   void handleBool(bool value) {
-    // TODO: implement handleBool
   }
 
   @override
   void handleNull() {
-    // TODO: implement handleNull
   }
 
   @override
   void handleNumber(num value) {
-    // TODO: implement handleNumber
   }
 
   @override
   void handleString(String value) {
-    // TODO: implement handleString
   }
 
   @override
   void propertyName() {
-    // TODO: implement propertyName
   }
 
   @override
   void propertyValue() {
-    // TODO: implement propertyValue
   }
-
-  // TODO: implement result
-  @override
-  get result => null;
 }
 
 typedef void AddFunc<T>(T data);
