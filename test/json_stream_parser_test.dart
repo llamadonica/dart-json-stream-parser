@@ -29,6 +29,11 @@ void main() {
       var theirs = new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData);
       _deepEqual(ours, theirs);
     });
+    test('our object is deep-equal to the dart:convert version', () {
+      var ours = new JsonUtf8Codec().decode(rawData);
+      var theirs = new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData);
+      _deepEqual(ours, theirs);
+    });
     test('decoder->encoder does not fail', () {
       var sink = new FuncSink<String>((data) {});
       var utf8Converter = new dart_convert.Utf8Decoder().startChunkedConversion(sink);
@@ -44,6 +49,21 @@ void main() {
       });
       var decoder = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sink));
       var theirs = new dart_convert.JsonEncoder().fuse(new dart_convert.Utf8Encoder()).convert(new dart_convert.Utf8Decoder().fuse(new dart_convert.JsonDecoder()).convert(rawData));
+      decoder.add(rawData);
+      decoder.close();
+
+      for (var i = 0; i < resultsB.length; i++) {
+        expect(theirs[i], resultsB[i]);
+      }
+    });
+    test('Deep decode has the same result too', () {
+      //We can relax this constraint later.
+      var resultsB = [];
+      var sink = new FuncSink<List<int>>((data) {
+        resultsB.addAll(data);
+      });
+      var decoder = new JsonUtf8Decoder().startChunkedConversion(new JsonUtf8Encoder().startChunkedConversion(sink));
+      var theirs = const JsonUtf8Codec().encode(const JsonUtf8Codec().decode(rawData));
       decoder.add(rawData);
       decoder.close();
 
@@ -169,6 +189,11 @@ void main() {
       var theirs = new dart_convert.JsonDecoder().convert(rawData);
       _deepEqual(ours, theirs);
     });
+    test('our object is deep-equal to the dart:convert version', () {
+      var ours = new JsonCodec().decode(rawData);
+      var theirs = new dart_convert.JsonDecoder().convert(rawData);
+      _deepEqual(ours, theirs);
+    });
     test('decoder->encoder does not fail', () {
       var sink = new FuncSink<String>((data) {});
       var decoder = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sink));
@@ -183,6 +208,19 @@ void main() {
       });
       var decoder = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sink));
       var theirs = new dart_convert.JsonEncoder().convert(new dart_convert.JsonDecoder().convert(rawData));
+      decoder.add(rawData);
+      decoder.close();
+
+      expect(theirs, resultsB.toString());
+    });
+    test('Deep decode also has the same result', () {
+      //We can relax this constraint later.
+      var resultsB = new StringBuffer();
+      var sink = new FuncSink<String>((data) {
+        resultsB.write(data);
+      });
+      var decoder = new JsonDecoder().startChunkedConversion(new JsonEncoder().startChunkedConversion(sink));
+      var theirs = const JsonCodec().encode(const JsonCodec().decode(rawData));
       decoder.add(rawData);
       decoder.close();
 
