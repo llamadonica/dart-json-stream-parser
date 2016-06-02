@@ -163,19 +163,19 @@ class _JsonObjectToStreamConverter {
   Iterable<JsonListenerEvent> _writeJsonValue(object) sync* {
     if (object is num) {
       if (!object.isFinite) return;
-      yield new JsonListenerEvent(_JsonListenerEventTag.handleNumber, object);
+      yield new JsonListenerEvent(JsonListenerEventTag.handleNumber, object);
       return;
     } else if (identical(object, true)) {
-      yield new JsonListenerEvent(_JsonListenerEventTag.handleBool, true);
+      yield new JsonListenerEvent(JsonListenerEventTag.handleBool, true);
       return;
     } else if (identical(object, false)) {
-      yield new JsonListenerEvent(_JsonListenerEventTag.handleBool, false);
+      yield new JsonListenerEvent(JsonListenerEventTag.handleBool, false);
       return;
     } else if (object == null) {
-      yield new JsonListenerEvent(_JsonListenerEventTag.handleNull);
+      yield new JsonListenerEvent(JsonListenerEventTag.handleNull);
       return;
     } else if (object is String) {
-      yield new JsonListenerEvent(_JsonListenerEventTag.handleString, object);
+      yield new JsonListenerEvent(JsonListenerEventTag.handleString, object);
       return;
     } else if (object is List) {
       _checkCycle(object);
@@ -194,16 +194,16 @@ class _JsonObjectToStreamConverter {
   }
 
   Iterable<JsonListenerEvent> _writeMap(Map object) sync* {
-    var cachedEvents = [const JsonListenerEvent(_JsonListenerEventTag.beginObject)];
+    var cachedEvents = [const JsonListenerEvent(JsonListenerEventTag.beginObject)];
     for (var key in object.keys) {
       if (key is! String) return;
-      cachedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleString, key));
-      cachedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyName));
+      cachedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleString, key));
+      cachedEvents.add(const JsonListenerEvent(JsonListenerEventTag.propertyName));
       cachedEvents.addAll(_writeJsonValue(object[key]));
-      cachedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyValue));
+      cachedEvents.add(const JsonListenerEvent(JsonListenerEventTag.propertyValue));
     }
     yield* cachedEvents;
-    yield const JsonListenerEvent(_JsonListenerEventTag.endObject);
+    yield const JsonListenerEvent(JsonListenerEventTag.endObject);
   }
 
   void _removeSeen(object) {
@@ -211,12 +211,12 @@ class _JsonObjectToStreamConverter {
   }
 
   Iterable<JsonListenerEvent> _writeList(List object) sync* {
-    yield new JsonListenerEvent(_JsonListenerEventTag.beginArray);
+    yield new JsonListenerEvent(JsonListenerEventTag.beginArray);
     for (var element in object) {
       yield* _writeJsonValue(element);
-      yield new JsonListenerEvent(_JsonListenerEventTag.arrayElement);
+      yield new JsonListenerEvent(JsonListenerEventTag.arrayElement);
     }
-    yield new JsonListenerEvent(_JsonListenerEventTag.endArray);
+    yield new JsonListenerEvent(JsonListenerEventTag.endArray);
   }
 }
 
@@ -610,7 +610,7 @@ abstract class _JsonEncoderSinkBase extends ChunkedConversionSink<List<JsonListe
 
   bool _needsComma = false;
 
-  void handleString(String object) {
+  void handleString(String object, {JsonListenerEvent event}) {
     if (_needsComma) _writeString(',');
     _writeString('"');
     _writeStringContent(object);
@@ -618,46 +618,46 @@ abstract class _JsonEncoderSinkBase extends ChunkedConversionSink<List<JsonListe
   }
 
   @override
-  void handleNumber(num value) {
+  void handleNumber(num value, {JsonListenerEvent event}) {
     if (_needsComma) _writeString(',');
     _writeNumber(value);
   }
 
   @override
-  void handleBool(bool value) {
+  void handleBool(bool value, {JsonListenerEvent event}) {
     if (_needsComma) _writeString(',');
     value ? _writeString('true') : _writeString('false');
   }
 
   @override
-  void handleNull() {
+  void handleNull({JsonListenerEvent event}) {
     if (_needsComma) _writeString(',');
     _writeString('null');
   }
 
-  @override beginObject() {
+  @override beginObject({JsonListenerEvent event}) {
     if (_needsComma) _writeString(',');
     _writeString('{');
     _needsComma = false;
   }
 
-  @override endObject() => _writeString('}');
+  @override endObject({JsonListenerEvent event}) => _writeString('}');
 
-  @override beginArray() {
+  @override beginArray({JsonListenerEvent event}) {
     if (_needsComma) _writeString(',');
     _writeString('[');
     _needsComma = false;
   }
 
-  @override endArray() => _writeString(']');
-  @override propertyName() {
+  @override endArray({JsonListenerEvent event}) => _writeString(']');
+  @override propertyName({JsonListenerEvent event}) {
     _writeString(':');
     _needsComma = false;
   }
-  @override propertyValue() {
+  @override propertyValue({JsonListenerEvent event}) {
     _needsComma = true;
   }
-  @override arrayElement() {
+  @override arrayElement({JsonListenerEvent event}) {
     _needsComma = true;
   }
 
@@ -665,7 +665,7 @@ abstract class _JsonEncoderSinkBase extends ChunkedConversionSink<List<JsonListe
 
   @override
   void add(List<JsonListenerEvent> chunk) =>
-      _handleEvent(chunk);
+      handleEvents(chunk);
 
   @override
   void close() {
@@ -981,56 +981,56 @@ class _JsonUtf8EncoderSinkPretty extends _JsonUtf8EncoderSink
  * Listener for parsing events from [_ChunkedJsonParser].
  */
 abstract class JsonListener {
-  void _handleEvent(List<JsonListenerEvent> event) {
+  void handleEvents(List<JsonListenerEvent> event) {
     for (var subevent in event) {
       switch (subevent.tag) {
-        case _JsonListenerEventTag.arrayElement:
-          arrayElement();
+        case JsonListenerEventTag.arrayElement:
+          arrayElement(event: subevent);
           break;
-        case _JsonListenerEventTag.beginArray:
-          beginArray();
+        case JsonListenerEventTag.beginArray:
+          beginArray(event: subevent);
           break;
-        case _JsonListenerEventTag.beginObject:
-          beginObject();
+        case JsonListenerEventTag.beginObject:
+          beginObject(event: subevent);
           break;
-        case _JsonListenerEventTag.endArray:
-          endArray();
+        case JsonListenerEventTag.endArray:
+          endArray(event: subevent);
           break;
-        case _JsonListenerEventTag.endObject:
-          endObject();
+        case JsonListenerEventTag.endObject:
+          endObject(event: subevent);
           break;
-        case _JsonListenerEventTag.handleBool:
-          handleBool(subevent.argument);
+        case JsonListenerEventTag.handleBool:
+          handleBool(subevent.argument, event: subevent);
           break;
-        case _JsonListenerEventTag.handleNull:
-          handleNull();
+        case JsonListenerEventTag.handleNull:
+          handleNull(event: subevent);
           break;
-        case _JsonListenerEventTag.handleNumber:
-          handleNumber(subevent.argument);
+        case JsonListenerEventTag.handleNumber:
+          handleNumber(subevent.argument, event: subevent);
           break;
-        case _JsonListenerEventTag.handleString:
-          handleString(subevent.argument);
+        case JsonListenerEventTag.handleString:
+          handleString(subevent.argument, event: subevent);
           break;
-        case _JsonListenerEventTag.propertyName:
-          propertyName();
+        case JsonListenerEventTag.propertyName:
+          propertyName(event: subevent);
           break;
-        case _JsonListenerEventTag.propertyValue:
-          propertyValue();
+        case JsonListenerEventTag.propertyValue:
+          propertyValue(event: subevent);
           break;
       }
     }
   }
-  void handleString(String value) {}
-  void handleNumber(num value) {}
-  void handleBool(bool value) {}
-  void handleNull() {}
-  void beginObject() {}
-  void propertyName() {}
-  void propertyValue() {}
-  void endObject() {}
-  void beginArray() {}
-  void arrayElement() {}
-  void endArray() {}
+  void handleString(String value, {JsonListenerEvent event}) {}
+  void handleNumber(num value, {JsonListenerEvent event}) {}
+  void handleBool(bool value, {JsonListenerEvent event}) {}
+  void handleNull({JsonListenerEvent event}) {}
+  void beginObject({JsonListenerEvent event}) {}
+  void propertyName({JsonListenerEvent event}) {}
+  void propertyValue({JsonListenerEvent event}) {}
+  void endObject({JsonListenerEvent event}) {}
+  void beginArray({JsonListenerEvent event}) {}
+  void arrayElement({JsonListenerEvent event}) {}
+  void endArray({JsonListenerEvent event}) {}
 
 /**
  * Read out the final result of parsing a JSON string.
@@ -1046,7 +1046,7 @@ class JsonListenerSink extends Sink<List<JsonListenerEvent>> {
 
   @override
   void add(List<JsonListenerEvent> data) {
-    _target._handleEvent(data);
+    _target.handleEvents(data);
   }
 
   @override
@@ -1054,13 +1054,13 @@ class JsonListenerSink extends Sink<List<JsonListenerEvent>> {
 }
 
 class JsonListenerEvent {
-  final _JsonListenerEventTag tag;
+  final JsonListenerEventTag tag;
   final dynamic argument;
   const JsonListenerEvent(this.tag, [this.argument]);
   String toString() => 'JsonListenerEvent($tag' + (argument == null ? ')' : ', $argument)');
 }
 
-enum _JsonListenerEventTag {
+enum JsonListenerEventTag {
   arrayElement,
   beginArray,
   beginObject,
@@ -1416,43 +1416,43 @@ class BuildJsonListener extends JsonSynchronousListener {
     if (currentContainer is Map) key = stack.removeLast();
   }
 
-  void handleString(String value) { this.value = value; }
-  void handleNumber(num value) { this.value = value; }
-  void handleBool(bool value) { this.value = value; }
-  void handleNull() { this.value = null; }
+  void handleString(String value, {JsonListenerEvent event}) { this.value = value; }
+  void handleNumber(num value, {JsonListenerEvent event}) { this.value = value; }
+  void handleBool(bool value, {JsonListenerEvent event}) { this.value = value; }
+  void handleNull({JsonListenerEvent event}) { this.value = null; }
 
-  void beginObject() {
+  void beginObject({JsonListenerEvent event}) {
     pushContainer();
     currentContainer = {};
   }
 
-  void propertyName() {
+  void propertyName({JsonListenerEvent event}) {
     key = value;
     value = null;
   }
 
-  void propertyValue() {
+  void propertyValue({JsonListenerEvent event}) {
     Map map = currentContainer;
     map[key] = value;
     key = value = null;
   }
 
-  void endObject() {
+  void endObject({JsonListenerEvent event}) {
     popContainer();
   }
 
-  void beginArray() {
+  void beginArray({JsonListenerEvent event}) {
     pushContainer();
     currentContainer = [];
   }
 
-  void arrayElement() {
+  void arrayElement({JsonListenerEvent event}) {
     List list = currentContainer;
     currentContainer.add(value);
     value = null;
   }
 
-  void endArray() {
+  void endArray({JsonListenerEvent event}) {
     popContainer();
   }
 
@@ -1467,13 +1467,13 @@ class _ReviverJsonListener extends BuildJsonListener {
   final _Reviver reviver;
   _ReviverJsonListener(reviver(key, value)) : this.reviver = reviver;
 
-  void arrayElement() {
+  void arrayElement({JsonListenerEvent event}) {
     List list = currentContainer;
     value = reviver(list.length, value);
     super.arrayElement();
   }
 
-  void propertyValue() {
+  void propertyValue({JsonListenerEvent event}) {
     value = reviver(key, value);
     super.propertyValue();
   }
@@ -2067,9 +2067,9 @@ abstract class _ChunkedJsonParser extends Sink {
       count++;
     } while (count < keyword.length);
     if (keywordType == KWD_NULL) {
-      _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleNull));
+      _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.handleNull));
     } else {
-      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleBool,keywordType == KWD_TRUE));
+      _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleBool,keywordType == KWD_TRUE));
     }
     return position;
   }
@@ -2092,7 +2092,7 @@ abstract class _ChunkedJsonParser extends Sink {
    */
   void parse(int position) {
     int length = chunkEnd;
-    
+
     if (partialState != NO_PARTIAL) {
       position = parsePartial(position);
       if (position == length) return;
@@ -2114,14 +2114,14 @@ abstract class _ChunkedJsonParser extends Sink {
           break;
         case LBRACKET:
           if ((state & ALLOW_VALUE_MASK) != 0) fail(position);
-          _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.beginArray));
+          _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.beginArray));
           saveState(state);
           state = STATE_ARRAY_EMPTY;
           position++;
           break;
         case LBRACE:
           if ((state & ALLOW_VALUE_MASK) != 0) fail(position);
-          _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.beginObject));
+          _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.beginObject));
           saveState(state);
           state = STATE_OBJECT_EMPTY;
           position++;
@@ -2143,17 +2143,17 @@ abstract class _ChunkedJsonParser extends Sink {
           break;
         case COLON:
           if (state != STATE_OBJECT_KEY) fail(position);
-          _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyName));
+          _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.propertyName));
           state = STATE_OBJECT_COLON;
           position++;
           break;
         case COMMA:
           if (state == STATE_OBJECT_VALUE) {
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyValue));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.propertyValue));
             state = STATE_OBJECT_COMMA;
             position++;
           } else if (state == STATE_ARRAY_VALUE) {
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.arrayElement));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.arrayElement));
             state = STATE_ARRAY_COMMA;
             position++;
           } else {
@@ -2162,10 +2162,10 @@ abstract class _ChunkedJsonParser extends Sink {
           break;
         case RBRACKET:
           if (state == STATE_ARRAY_EMPTY) {
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endArray));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.endArray));
           } else if (state == STATE_ARRAY_VALUE) {
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.arrayElement));
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endArray));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.arrayElement));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.endArray));
           } else {
             fail(position);
           }
@@ -2174,10 +2174,10 @@ abstract class _ChunkedJsonParser extends Sink {
           break;
         case RBRACE:
           if (state == STATE_OBJECT_EMPTY) {
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endObject));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.endObject));
           } else if (state == STATE_OBJECT_VALUE) {
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.propertyValue));
-            _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.endObject));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.propertyValue));
+            _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.endObject));
           } else {
             fail(position);
           }
@@ -2212,7 +2212,7 @@ abstract class _ChunkedJsonParser extends Sink {
         getChar(position + 3) != CHAR_e) {
       return fail(position);
     }
-    _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleBool,true));
+    _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.handleBool,true));
     return position + 4;
   }
 
@@ -2232,7 +2232,7 @@ abstract class _ChunkedJsonParser extends Sink {
         getChar(position + 4) != CHAR_e) {
       return fail(position);
     }
-    _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleBool,false));
+    _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.handleBool,false));
     return position + 5;
   }
 
@@ -2251,7 +2251,7 @@ abstract class _ChunkedJsonParser extends Sink {
         getChar(position + 3) != CHAR_l) {
       return fail(position);
     }
-    _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleNull));
+    _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.handleNull));
     return position + 4;
   }
 
@@ -2295,7 +2295,7 @@ abstract class _ChunkedJsonParser extends Sink {
         return parseStringToBuffer(sliceEnd);
       }
       if (char == QUOTE) {
-        _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleString, getString(start, position - 1, bits)));
+        _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleString, getString(start, position - 1, bits)));
         return position;
       }
       if (char < SPACE) {
@@ -2365,7 +2365,7 @@ abstract class _ChunkedJsonParser extends Sink {
         if (quotePosition > start) {
           addSliceToString(start, quotePosition);
         }
-        _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleString,endString()));
+        _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleString,endString()));
         return position;
       }
       if (char != BACKSLASH) {
@@ -2468,16 +2468,16 @@ abstract class _ChunkedJsonParser extends Sink {
 
   int finishChunkNumber(int state, int start, int end, _NumberBuffer buffer) {
     if (state == NUM_ZERO) {
-      _chunkedEvents.add(const JsonListenerEvent(_JsonListenerEventTag.handleNumber,0));
+      _chunkedEvents.add(const JsonListenerEvent(JsonListenerEventTag.handleNumber,0));
       return end;
     }
     if (end > start) {
       addNumberChunk(buffer, start, end, 0);
     }
     if (state == NUM_DIGIT) {
-      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,buffer.parseInt()));
+      _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,buffer.parseInt()));
     } else if (state == NUM_DOT_DIGIT || state == NUM_E_DIGIT) {
-      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,buffer.parseDouble()));
+      _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,buffer.parseDouble()));
     } else {
       fail(chunkEnd, "Unterminated number literal");
     }
@@ -2579,7 +2579,7 @@ abstract class _ChunkedJsonParser extends Sink {
       intValue += expSign * exponent;
     }
     if (!isDouble) {
-      _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,sign * intValue));
+      _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,sign * intValue));
       return position;
     }
     // Double values at or above this value (2 ** 53) may have lost precission.
@@ -2590,15 +2590,15 @@ abstract class _ChunkedJsonParser extends Sink {
       double signedMantissa = doubleValue * sign;
       if (exponent >= -22) {
         if (exponent < 0) {
-          _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,signedMantissa / POWERS_OF_TEN[-exponent]));
+          _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,signedMantissa / POWERS_OF_TEN[-exponent]));
           return position;
         }
         if (exponent == 0) {
-          _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,signedMantissa));
+          _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,signedMantissa));
           return position;
         }
         if (exponent <= 22) {
-          _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,signedMantissa * POWERS_OF_TEN[exponent]));
+          _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,signedMantissa * POWERS_OF_TEN[exponent]));
           return position;
         }
       }
@@ -2606,7 +2606,7 @@ abstract class _ChunkedJsonParser extends Sink {
     // If the value is outside the range +/-maxExactDouble or
     // exponent is outside the range +/-22, then we can't trust simple double
     // arithmetic to get the exact result, so we use the system double parsing.
-    _chunkedEvents.add(new JsonListenerEvent(_JsonListenerEventTag.handleNumber,parseDouble(start, position)));
+    _chunkedEvents.add(new JsonListenerEvent(JsonListenerEventTag.handleNumber,parseDouble(start, position)));
     return position;
   }
 

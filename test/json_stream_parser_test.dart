@@ -350,50 +350,6 @@ Uint8List slowCopy(Uint8List originalBuffer, int i, int j) =>
 
 
 class MyJsonListener extends JsonListener {
-
-  @override
-  void arrayElement() {
-  }
-
-  @override
-  void beginArray() {
-  }
-
-  @override
-  void beginObject() {
-  }
-
-  @override
-  void endArray() {
-  }
-
-  @override
-  void endObject() {
-  }
-
-  @override
-  void handleBool(bool value) {
-  }
-
-  @override
-  void handleNull() {
-  }
-
-  @override
-  void handleNumber(num value) {
-  }
-
-  @override
-  void handleString(String value) {
-  }
-
-  @override
-  void propertyName() {
-  }
-
-  @override
-  void propertyValue() {
-  }
 }
 
 typedef void AddFunc<T>(T data);
